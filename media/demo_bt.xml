@@ -1,0 +1,44 @@
+<root BTCPP_format="4" main_tree_to_execute="PickAndPlace">
+    <BehaviorTree ID="PickAndPlace">
+        <Sequence name="pick_and_place">
+            <RetryUntilSuccessful num_attempts="3">
+                <Action ID="DetectObject"
+                        target="{target_label}"
+                        detection="{detection}"/>
+            </RetryUntilSuccessful>
+
+            <Fallback name="pick_with_recovery">
+                <Sequence name="execute_pick">
+                    <Action ID="MoveToGrasp"
+                            pose="{detection}"
+                            arm="left"/>
+                    <Action ID="CloseGripper"
+                            hand="left_hand"/>
+                </Sequence>
+                <Sequence name="recovery">
+                    <ForceSuccess>
+                        <Action ID="OpenGripper" hand="left_hand"/>
+                    </ForceSuccess>
+                    <Action ID="MoveToHome" group="left_arm"/>
+                    <AlwaysFailure/>
+                </Sequence>
+            </Fallback>
+
+            <SubTree ID="PlaceSequence"
+                     arm="left"
+                     place_pose="{place_target}"/>
+        </Sequence>
+    </BehaviorTree>
+
+    <BehaviorTree ID="PlaceSequence">
+        <Sequence name="place">
+            <Action ID="MoveToPlace"
+                    pose="{place_pose}"
+                    arm="{arm}"/>
+            <Action ID="OpenGripper"
+                    hand="{arm}_hand"/>
+            <Action ID="MoveToHome"
+                    group="{arm}_arm"/>
+        </Sequence>
+    </BehaviorTree>
+</root>

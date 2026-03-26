@@ -1,0 +1,27 @@
+.vscode/**
+src/**
+out/**
+bridge/**
+tsconfig.json
+**/*.map
+*.vsix
+
+# Exclude all node_modules except runtime deps
+node_modules/.package-lock.json
+node_modules/@types/**
+node_modules/esbuild/**
+node_modules/@esbuild/**
+node_modules/typescript/**
+node_modules/node-addon-api/**
+
+# cmake-ts: only need the loader at runtime
+node_modules/cmake-ts/src/**
+node_modules/cmake-ts/test/**
+node_modules/cmake-ts/*.md
+node_modules/cmake-ts/package.json
+
+# zeromq: strip non-linux platforms and musl
+node_modules/zeromq/build/win32/**
+node_modules/zeromq/build/darwin/**
+node_modules/zeromq/build/linux/arm64/**
+node_modules/zeromq/build/linux/x64/node/musl-*/**
