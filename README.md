@@ -6,6 +6,10 @@
 
 A free, open-source VSCode extension for visualizing and monitoring [BehaviorTree.CPP](https://www.behaviortree.dev/) v4 XML files. A lightweight alternative to Groot2.
 
+| Horizontal (small trees) | Waterfall (large trees) |
+|---|---|
+| ![Horizontal](media/horizontal_demo_bt.png) | ![Waterfall](media/vertical_demo_bt.png) |
+
 ## Features
 
 **Tree Visualization**
