@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import * as path from "path";
 import { parseBTXml, expandSubtrees } from "./btParser";
-import { BTParsedFile, CATEGORY_COLORS } from "./types";
+import { BTParsedFile } from "./types";
 import { BTMonitor } from "./btMonitor";
 
 function debounce<T extends (...args: any[]) => void>(fn: T, ms: number): T {
@@ -101,6 +101,12 @@ export class BTViewerPanel {
       this.disposables
     );
 
+    vscode.window.onDidChangeActiveColorTheme(
+      () => this.panel.webview.postMessage({ command: "themeChanged" }),
+      null,
+      this.disposables
+    );
+
     this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
   }
 
@@ -150,7 +156,6 @@ export class BTViewerPanel {
             command: "updateTree",
             data: parsed,
             fileName: "(live)",
-            colors: CATEGORY_COLORS,
             fromMonitor: true,
           });
         } catch {
@@ -182,7 +187,6 @@ export class BTViewerPanel {
         command: "updateTree",
         data: parsed,
         fileName: path.basename(this.currentDocument.uri.fsPath),
-        colors: CATEGORY_COLORS,
       });
     } catch (e: any) {
       this.panel.webview.postMessage({

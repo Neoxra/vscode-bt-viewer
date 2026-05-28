@@ -14,20 +14,27 @@
   --bt-font: var(--vscode-font-family, "Segoe UI", system-ui, sans-serif);
   --bt-mono: var(--vscode-editor-font-family, "Cascadia Code", "JetBrains Mono", "Fira Code", Consolas, monospace);
 
-  /* Category colors -- saturated but not neon */
-  --cat-control: #d97706;
-  --cat-decorator: #059669;
-  --cat-action: #2563eb;
-  --cat-condition: #ca8a04;
-  --cat-subtree: #7c3aed;
-  --cat-script: #64748b;
-  --cat-root: #475569;
+  /* Category colors -- driven by the active VSCode theme's charts palette.
+     Fallbacks preserve the original "Mission Control" hues if a theme
+     omits one of the chart slots. */
+  --bt-cat-root:      var(--vscode-charts-lines,  #64748b);
+  --bt-cat-control:   var(--vscode-charts-orange, #d97706);
+  --bt-cat-decorator: var(--vscode-charts-green,  #059669);
+  --bt-cat-action:    var(--vscode-charts-blue,   #2563eb);
+  --bt-cat-condition: var(--vscode-charts-yellow, #ca8a04);
+  --bt-cat-subtree:   var(--vscode-charts-purple, #7c3aed);
+  --bt-cat-script:    var(--vscode-charts-lines,  #64748b);
 
-  /* Status colors */
-  --status-running: #38bdf8;
-  --status-success: #34d399;
-  --status-failure: #f87171;
-  --status-idle: #334155;
+  /* Text colour drawn on top of category fills. */
+  --bt-cat-text: var(--vscode-editor-foreground, #f1f5f9);
+
+  /* Status colours follow VSCode's testing / debug semantics so that
+     "running/passed/failed" tracks whatever convention the theme picks. */
+  --status-running: var(--vscode-charts-blue,        #38bdf8);
+  --status-success: var(--vscode-testing-iconPassed, var(--vscode-charts-green, #34d399));
+  --status-failure: var(--vscode-testing-iconFailed, var(--vscode-charts-red,   #f87171));
+  --status-idle:    var(--vscode-disabledForeground, #334155);
+  --status-search:  var(--vscode-charts-yellow,      #fbbf24);
 }
 
 * {
@@ -353,9 +360,9 @@ body {
 }
 
 .bt-node.search-match rect {
-  stroke: #fbbf24 !important;
+  stroke: var(--status-search) !important;
   stroke-width: 2.5 !important;
-  filter: drop-shadow(0 0 6px rgba(251, 191, 36, 0.3));
+  filter: drop-shadow(0 0 6px var(--status-search));
 }
 
 .bt-node.search-dim {
@@ -459,7 +466,10 @@ body {
 
 .bt-edge {
   fill: none;
-  stroke: rgba(255, 255, 255, 0.12);
+  /* Use the tree-guide stroke so edges read on both light and dark themes;
+     fall back to panel-border, then a neutral mid-grey if neither is set. */
+  stroke: var(--vscode-tree-indentGuidesStroke, var(--vscode-panel-border, #6e7681));
+  stroke-opacity: 0.7;
   stroke-width: 1.5;
   stroke-linecap: round;
   stroke-linejoin: round;
@@ -563,26 +573,26 @@ body {
 }
 
 .port-dir-out {
-  background: rgba(37, 99, 235, 0.2);
-  color: #60a5fa;
+  background: color-mix(in srgb, var(--vscode-charts-blue, #2563eb) 20%, transparent);
+  color: var(--vscode-charts-blue, #60a5fa);
 }
 
 .port-dir-io {
-  background: rgba(124, 58, 237, 0.2);
-  color: #a78bfa;
+  background: color-mix(in srgb, var(--vscode-charts-purple, #7c3aed) 20%, transparent);
+  color: var(--vscode-charts-purple, #a78bfa);
 }
 
 .detail-port-value {
   font-family: var(--bt-mono);
   font-size: 11px;
-  color: #e2a059;
+  color: var(--vscode-charts-orange, #e2a059);
   padding-left: 6px;
   word-break: break-all;
 }
 
 .detail-port-type {
   font-size: 10px;
-  color: #6dd4a0;
+  color: var(--vscode-charts-green, #6dd4a0);
   font-family: var(--bt-mono);
 }
 
@@ -645,7 +655,7 @@ body {
 }
 
 .tooltip .tt-port .port-value {
-  color: #e2a059;
+  color: var(--vscode-charts-orange, #e2a059);
 }
 
 /* ---- MINIMAP ---- */

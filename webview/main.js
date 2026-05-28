@@ -20,9 +20,46 @@
   const PORT_LINE_H = 12;
   const CHAR_WIDTH = 6.4;
 
+  // Opacity used to tint node fills with their stroke colour so the same
+  // hex value works as both saturated stroke and translucent body fill.
+  const NODE_FILL_OPACITY = 0.22;
+
+  // Categories the viewer knows how to colour. Order matches CSS var names.
+  const CATEGORY_KEYS = [
+    "root", "control", "decorator", "action",
+    "condition", "subtree", "script",
+  ];
+
+  // Read category and status colours from CSS custom properties. Returns a
+  // map { cat -> { fill, stroke, text } } where fill === stroke (the rect
+  // itself sets fill-opacity to soften the body). Re-running this picks up
+  // whichever theme is active in VSCode at the moment of the call.
+  function readThemeColors() {
+    const rootStyle = getComputedStyle(document.documentElement);
+    const v = (name, fallback) => {
+      const raw = rootStyle.getPropertyValue(name).trim();
+      return raw || fallback;
+    };
+    const text = v("--bt-cat-text", "#f1f5f9");
+    const out = {};
+    for (const cat of CATEGORY_KEYS) {
+      const c = v(`--bt-cat-${cat}`, "#64748b");
+      out[cat] = { fill: c, stroke: c, text };
+    }
+    out.status = {
+      running: v("--status-running", "#38bdf8"),
+      success: v("--status-success", "#34d399"),
+      failure: v("--status-failure", "#f87171"),
+      idle:    v("--status-idle",    "#334155"),
+      edge:    v("--vscode-panel-border", "#555"),
+      viewport: v("--vscode-editor-foreground", "#fff"),
+    };
+    return out;
+  }
+
   // State
   let treeData = null;
-  let colors = {};
+  let colors = readThemeColors();
   let zoom = 1;
   let panX = 0;
   let panY = 40;
@@ -523,6 +560,7 @@
     rect.setAttribute("width", String(node._w));
     rect.setAttribute("height", String(node._h));
     rect.setAttribute("fill", color.fill);
+    rect.setAttribute("fill-opacity", String(NODE_FILL_OPACITY));
     rect.setAttribute("stroke", color.stroke);
     rect.setAttribute("stroke-width", "1.5");
     rect.setAttribute("rx", "6");
@@ -1029,7 +1067,7 @@
     const oy = pad + (ch - pad * 2 - bounds.h * scale) / 2 - bounds.minY * scale;
 
     // Draw edges
-    ctx.strokeStyle = "#555";
+    ctx.strokeStyle = (colors.status && colors.status.edge) || "#555";
     ctx.lineWidth = 0.5;
     for (const e of edgeElements) {
       const src = nodeById.get(e.sourceId);
@@ -1051,14 +1089,15 @@
       const nw = Math.max(node._w * scale, 2);
       const nh = Math.max(node._h * scale, 1.5);
 
-      // Highlight running nodes
+      // Highlight running nodes using the same palette as the SVG view.
       const el = nodeElements.get(node.id);
+      const status = colors.status || {};
       if (el && el.classList.contains("status-running")) {
-        ctx.fillStyle = "#00bfff";
+        ctx.fillStyle = status.running || color.fill;
       } else if (el && el.classList.contains("status-success")) {
-        ctx.fillStyle = "#00ff88";
+        ctx.fillStyle = status.success || color.fill;
       } else if (el && el.classList.contains("status-failure")) {
-        ctx.fillStyle = "#ff4444";
+        ctx.fillStyle = status.failure || color.fill;
       } else {
         ctx.fillStyle = color.fill;
       }
@@ -1071,7 +1110,7 @@
     const vw = (containerRect.width / zoom) * scale;
     const vh = (containerRect.height / zoom) * scale;
 
-    ctx.strokeStyle = "#fff";
+    ctx.strokeStyle = (colors.status && colors.status.viewport) || "#fff";
     ctx.lineWidth = 1.5;
     ctx.strokeRect(vx, vy, vw, vh);
   }
@@ -1270,7 +1309,7 @@
 
     let html = "";
     if (sorted.length === 0) {
-      html = '<div style="color:#888;padding:10px">No blackboard variables found</div>';
+      html = '<div style="color:var(--vscode-descriptionForeground,#888);padding:10px">No blackboard variables found</div>';
     } else {
       for (const name of sorted) {
         const v = vars[name];
@@ -1361,7 +1400,7 @@
     }
 
     if (!html) {
-      html = '<div style="color:#888;padding:10px">No node models found in XML</div>';
+      html = '<div style="color:var(--vscode-descriptionForeground,#888);padding:10px">No node models found in XML</div>';
     }
 
     sidePanelTitle.textContent = "Node Palette";
@@ -1794,7 +1833,9 @@
     switch (msg.command) {
       case "updateTree":
         treeData = msg.data;
-        colors = msg.colors || {};
+        // Always re-read from CSS so colours track the live VSCode theme,
+        // even if the host posted updateTree before the first themeChanged.
+        colors = readThemeColors();
         fileNameEl.textContent = msg.fileName || "Behavior Tree";
         errorOverlay.classList.add("hidden");
         collapsedNodes.clear();
@@ -1849,6 +1890,20 @@
         monitorStatusEl.textContent = "";
         clearMonitorOverlay();
         updateFollowButtonState();
+        break;
+
+      case "themeChanged":
+        // VSCode swapped the active colour theme; pull the new chart values
+        // and repaint everything that doesn't already cascade via CSS vars
+        // (SVG fills/strokes set as attributes, minimap canvas).
+        colors = readThemeColors();
+        if (treeData) {
+          render();
+          // Side panel content embeds the chart hexes inline (border-left
+          // styles, swatches), so refresh whichever is open.
+          if (activeSidePanel === "blackboard") showBlackboard();
+          if (activeSidePanel === "palette") showPalette();
+        }
         break;
     }
   });
