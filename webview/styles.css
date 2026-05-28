@@ -666,7 +666,9 @@ body {
   right: 12px;
   border: 1px solid var(--bt-border);
   border-radius: 6px;
-  background: rgba(13, 17, 23, 0.85);
+  /* Mix the theme's editor-widget background with transparency so the panel
+     stays subtle while still tracking light/dark themes. */
+  background: color-mix(in srgb, var(--vscode-editorWidget-background, #161b22) 85%, transparent);
   backdrop-filter: blur(12px);
   cursor: crosshair;
   z-index: 15;
@@ -677,7 +679,8 @@ body {
 #minimap:hover {
   opacity: 1;
   border-color: var(--bt-accent);
-  box-shadow: 0 0 12px rgba(31, 111, 235, 0.15);
+  /* Glow uses the active focus colour rather than a fixed blue. */
+  box-shadow: 0 0 12px color-mix(in srgb, var(--bt-accent) 30%, transparent);
 }
 
 /* ---- LEGEND ---- */
@@ -689,7 +692,7 @@ body {
   display: flex;
   gap: 14px;
   padding: 6px 14px;
-  background: rgba(13, 17, 23, 0.85);
+  background: color-mix(in srgb, var(--vscode-editorWidget-background, #161b22) 85%, transparent);
   backdrop-filter: blur(12px);
   border: 1px solid var(--bt-border);
   border-radius: 6px;
