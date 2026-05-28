@@ -2044,15 +2044,6 @@ var path = __toESM(require("path"));
 var import_fast_xml_parser = __toESM(require_fxp());
 
 // src/types.ts
-var CATEGORY_COLORS = {
-  root: { fill: "#334155", stroke: "#64748b", text: "#f1f5f9" },
-  control: { fill: "#92400e", stroke: "#f59e0b", text: "#fef3c7" },
-  decorator: { fill: "#065f46", stroke: "#10b981", text: "#d1fae5" },
-  action: { fill: "#1e40af", stroke: "#3b82f6", text: "#dbeafe" },
-  condition: { fill: "#713f12", stroke: "#eab308", text: "#fef9c3" },
-  subtree: { fill: "#5b21b6", stroke: "#8b5cf6", text: "#ede9fe" },
-  script: { fill: "#374151", stroke: "#9ca3af", text: "#e5e7eb" }
-};
 var CONTROL_NODES = /* @__PURE__ */ new Set([
   "Sequence",
   "ReactiveSequence",
@@ -2562,6 +2553,11 @@ var BTViewerPanel = class _BTViewerPanel {
       null,
       this.disposables
     );
+    vscode.window.onDidChangeActiveColorTheme(
+      () => this.panel.webview.postMessage({ command: "themeChanged" }),
+      null,
+      this.disposables
+    );
     this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
   }
   update(document) {
@@ -2606,7 +2602,6 @@ var BTViewerPanel = class _BTViewerPanel {
             command: "updateTree",
             data: parsed,
             fileName: "(live)",
-            colors: CATEGORY_COLORS,
             fromMonitor: true
           });
         } catch {
@@ -2632,8 +2627,7 @@ var BTViewerPanel = class _BTViewerPanel {
       this.panel.webview.postMessage({
         command: "updateTree",
         data: parsed,
-        fileName: path.basename(this.currentDocument.uri.fsPath),
-        colors: CATEGORY_COLORS
+        fileName: path.basename(this.currentDocument.uri.fsPath)
       });
     } catch (e) {
       this.panel.webview.postMessage({
