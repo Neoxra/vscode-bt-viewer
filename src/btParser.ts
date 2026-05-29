@@ -48,16 +48,33 @@ function buildTagCursor(xml: string): TagCursor {
     return lo + 1; // 1-based
   };
 
-  // Skip past the TreeNodesModel block so its sample-shape <Action ID="..."/>
-  // tags don't poison the cursor when the real tree references the same name.
-  const skipEnd = xml.indexOf("</TreeNodesModel>");
-  const minIdx = skipEnd >= 0 ? skipEnd : 0;
+  // Collect every <TreeNodesModel>...</TreeNodesModel> block's [start, end)
+  // byte range so we can skip *interior* tags (the schema's sample-shape
+  // <Action ID="..."/> stubs), regardless of where the block appears in the
+  // file. The earlier "skip everything before </TreeNodesModel>" heuristic
+  // broke for files that put the model block at the bottom (BT.CPP-valid).
+  const skipRanges: Array<[number, number]> = [];
+  const openRe = /<TreeNodesModel(?=[\s>])/g;
+  const closeStr = "</TreeNodesModel>";
+  let openMatch: RegExpExecArray | null;
+  while ((openMatch = openRe.exec(xml))) {
+    const closeIdx = xml.indexOf(closeStr, openMatch.index);
+    if (closeIdx >= 0) {
+      skipRanges.push([openMatch.index, closeIdx + closeStr.length]);
+    }
+  }
+  const inSkip = (idx: number): boolean => {
+    for (const [lo, hi] of skipRanges) {
+      if (idx >= lo && idx < hi) return true;
+    }
+    return false;
+  };
 
   const tags: Array<{ tagName: string; line: number }> = [];
   const tagRe = /<(\w+)(?=[\s/>])/g;
   let m: RegExpExecArray | null;
   while ((m = tagRe.exec(xml))) {
-    if (m.index < minIdx) continue;
+    if (inSkip(m.index)) continue;
     tags.push({ tagName: m[1], line: lineOf(m.index) });
   }
 
@@ -258,8 +275,15 @@ function parseTreeNodesModel(
   return { models, modelMap, portModelMap };
 }
 
-export function parseBTXml(xmlContent: string): BTParsedFile {
-  nodeIdCounter = 0;
+export function parseBTXml(
+  xmlContent: string,
+  options?: { resetIds?: boolean },
+): BTParsedFile {
+  // Cross-file SubTree resolution parses multiple files into a single merged
+  // tree pool; passing resetIds:false keeps node ids unique across files.
+  if (options?.resetIds !== false) {
+    nodeIdCounter = 0;
+  }
   const cursor = buildTagCursor(xmlContent);
 
   const parser = new XMLParser({
@@ -311,46 +335,4 @@ export function parseBTXml(xmlContent: string): BTParsedFile {
   }
 
   return { mainTreeId, trees, nodeModels: models };
-}
-
-/**
- * Expand SubTree references inline, replacing SubTree nodes with the actual tree content.
- */
-export function expandSubtrees(parsed: BTParsedFile): BTParsedFile {
-  const treeMap = new Map<string, BTTreeData>();
-  for (const tree of parsed.trees) {
-    treeMap.set(tree.id, tree);
-  }
-
-  function expandNode(node: BTNodeData, visited: Set<string>): BTNodeData {
-    if (node.category === "subtree") {
-      const treeName = node.ports.find(p => p.name === "ID")?.value || node.name;
-      const tree = treeMap.get(treeName);
-
-      if (tree && !visited.has(tree.id)) {
-        visited.add(tree.id);
-        const expanded = expandNode(JSON.parse(JSON.stringify(tree.root)), visited);
-        visited.delete(tree.id);
-        return {
-          ...expanded,
-          name: `[${treeName}] ${expanded.name}`,
-        };
-      }
-    }
-
-    return {
-      ...node,
-      children: node.children.map((c) => expandNode(c, new Set(visited))),
-    };
-  }
-
-  const mainTree = parsed.trees.find((t) => t.id === parsed.mainTreeId) || parsed.trees[0];
-  if (!mainTree) return parsed;
-
-  const expandedRoot = expandNode(JSON.parse(JSON.stringify(mainTree.root)), new Set([mainTree.id]));
-
-  return {
-    ...parsed,
-    trees: [{ id: mainTree.id, root: expandedRoot }],
-  };
 }

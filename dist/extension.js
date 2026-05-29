@@ -2108,13 +2108,27 @@ function buildTagCursor(xml) {
     }
     return lo + 1;
   };
-  const skipEnd = xml.indexOf("</TreeNodesModel>");
-  const minIdx = skipEnd >= 0 ? skipEnd : 0;
+  const skipRanges = [];
+  const openRe = /<TreeNodesModel(?=[\s>])/g;
+  const closeStr = "</TreeNodesModel>";
+  let openMatch;
+  while (openMatch = openRe.exec(xml)) {
+    const closeIdx = xml.indexOf(closeStr, openMatch.index);
+    if (closeIdx >= 0) {
+      skipRanges.push([openMatch.index, closeIdx + closeStr.length]);
+    }
+  }
+  const inSkip = (idx) => {
+    for (const [lo, hi] of skipRanges) {
+      if (idx >= lo && idx < hi) return true;
+    }
+    return false;
+  };
   const tags = [];
   const tagRe = /<(\w+)(?=[\s/>])/g;
   let m;
   while (m = tagRe.exec(xml)) {
-    if (m.index < minIdx) continue;
+    if (inSkip(m.index)) continue;
     tags.push({ tagName: m[1], line: lineOf(m.index) });
   }
   let i = 0;
@@ -2271,8 +2285,10 @@ function parseTreeNodesModel(rootChildren) {
   }
   return { models, modelMap, portModelMap };
 }
-function parseBTXml(xmlContent) {
-  nodeIdCounter = 0;
+function parseBTXml(xmlContent, options) {
+  if (options?.resetIds !== false) {
+    nodeIdCounter = 0;
+  }
   const cursor = buildTagCursor(xmlContent);
   const parser = new import_fast_xml_parser.XMLParser({
     ignoreAttributes: false,
@@ -2309,38 +2325,6 @@ function parseBTXml(xmlContent) {
     }
   }
   return { mainTreeId, trees, nodeModels: models };
-}
-function expandSubtrees(parsed) {
-  const treeMap = /* @__PURE__ */ new Map();
-  for (const tree of parsed.trees) {
-    treeMap.set(tree.id, tree);
-  }
-  function expandNode(node, visited) {
-    if (node.category === "subtree") {
-      const treeName = node.ports.find((p) => p.name === "ID")?.value || node.name;
-      const tree = treeMap.get(treeName);
-      if (tree && !visited.has(tree.id)) {
-        visited.add(tree.id);
-        const expanded = expandNode(JSON.parse(JSON.stringify(tree.root)), visited);
-        visited.delete(tree.id);
-        return {
-          ...expanded,
-          name: `[${treeName}] ${expanded.name}`
-        };
-      }
-    }
-    return {
-      ...node,
-      children: node.children.map((c) => expandNode(c, new Set(visited)))
-    };
-  }
-  const mainTree = parsed.trees.find((t) => t.id === parsed.mainTreeId) || parsed.trees[0];
-  if (!mainTree) return parsed;
-  const expandedRoot = expandNode(JSON.parse(JSON.stringify(mainTree.root)), /* @__PURE__ */ new Set([mainTree.id]));
-  return {
-    ...parsed,
-    trees: [{ id: mainTree.id, root: expandedRoot }]
-  };
 }
 
 // src/btMonitor.ts
@@ -2521,8 +2505,13 @@ var BTViewerPanel = class _BTViewerPanel {
   extensionUri;
   disposables = [];
   currentDocument;
-  expandSubtreesEnabled = false;
   monitor = null;
+  // Caches for cross-file SubTree resolution. xmlIndex is a path -> tree IDs
+  // map (built via regex over all .xml in the workspace); parsedFiles caches
+  // full parses of files we actually pulled trees from. Both are invalidated
+  // by the file system watcher on .xml changes.
+  xmlIndex;
+  parsedFileCache = /* @__PURE__ */ new Map();
   static createOrShow(extensionUri, document) {
     const column = vscode.ViewColumn.Active;
     if (_BTViewerPanel.currentPanel) {
@@ -2555,24 +2544,26 @@ var BTViewerPanel = class _BTViewerPanel {
       (message) => {
         switch (message.command) {
           case "goToLine":
-            if (this.currentDocument && message.line) {
+            if (message.line) {
               const lineNum = Math.max(0, message.line - 1);
               const range = new vscode.Range(lineNum, 0, lineNum, Number.MAX_SAFE_INTEGER);
-              const docUri = this.currentDocument.uri.toString();
-              const existing = vscode.window.visibleTextEditors.find(
-                (e) => e.document.uri.toString() === docUri
-              );
-              vscode.window.showTextDocument(this.currentDocument, {
+              const targetUri = message.file ? vscode.Uri.file(message.file) : this.currentDocument?.uri;
+              if (!targetUri) break;
+              const viewerColumn = this.panel.viewColumn;
+              let targetColumn;
+              for (const group of vscode.window.tabGroups.all) {
+                if (group.viewColumn !== viewerColumn) {
+                  targetColumn = group.viewColumn;
+                  break;
+                }
+              }
+              vscode.window.showTextDocument(targetUri, {
                 selection: range,
-                viewColumn: existing ? existing.viewColumn : vscode.ViewColumn.Beside,
+                viewColumn: targetColumn ?? vscode.ViewColumn.Beside,
                 preserveFocus: false,
                 preview: false
               });
             }
-            break;
-          case "toggleSubtrees":
-            this.expandSubtreesEnabled = !this.expandSubtreesEnabled;
-            this.sendTreeData();
             break;
           case "startMonitor": {
             const config = vscode.workspace.getConfiguration("behaviortreeViewer");
@@ -2609,6 +2600,19 @@ var BTViewerPanel = class _BTViewerPanel {
       null,
       this.disposables
     );
+    const watcher = vscode.workspace.createFileSystemWatcher("**/*.xml");
+    watcher.onDidChange((uri) => {
+      this.xmlIndex?.delete(uri.fsPath);
+      this.parsedFileCache.delete(uri.fsPath);
+    });
+    watcher.onDidCreate(() => {
+      this.xmlIndex = void 0;
+    });
+    watcher.onDidDelete((uri) => {
+      this.xmlIndex?.delete(uri.fsPath);
+      this.parsedFileCache.delete(uri.fsPath);
+    });
+    this.disposables.push(watcher);
     this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
   }
   update(document) {
@@ -2645,10 +2649,7 @@ var BTViewerPanel = class _BTViewerPanel {
       },
       onTree: (xml) => {
         try {
-          let parsed = parseBTXml(xml);
-          if (this.expandSubtreesEnabled) {
-            parsed = expandSubtrees(parsed);
-          }
+          const parsed = parseBTXml(xml);
           this.panel.webview.postMessage({
             command: "updateTree",
             data: parsed,
@@ -2661,6 +2662,98 @@ var BTViewerPanel = class _BTViewerPanel {
     });
     this.monitor.start(host, port);
   }
+  /**
+   * Workspace-scoped index of `<BehaviorTree ID="X">` declarations across
+   * all .xml files. Built lazily on first need via regex (no full parse) and
+   * cached on the instance. Invalidated surgically by the file system watcher
+   * when individual files change; fully rebuilt when files are added.
+   */
+  async getXmlIndex() {
+    if (this.xmlIndex) return this.xmlIndex;
+    const index = /* @__PURE__ */ new Map();
+    const xmlFiles = await vscode.workspace.findFiles(
+      "**/*.xml",
+      "**/{node_modules,build,install,dist,.git,.venv,venv}/**",
+      2e3
+    );
+    const decoder = new TextDecoder();
+    const ID_RE = /<BehaviorTree\s+ID="([^"]+)"/g;
+    await Promise.all(
+      xmlFiles.map(async (uri) => {
+        try {
+          const text = decoder.decode(await vscode.workspace.fs.readFile(uri));
+          if (!text.includes("<BehaviorTree")) return;
+          const ids = [];
+          for (const m of text.matchAll(ID_RE)) ids.push(m[1]);
+          if (ids.length > 0) index.set(uri.fsPath, ids);
+        } catch {
+        }
+      })
+    );
+    this.xmlIndex = index;
+    return index;
+  }
+  /**
+   * Merge SubTree definitions from anywhere in the workspace into the parsed
+   * tree pool, so the tree-selector dropdown and "View SubTree" button can
+   * navigate across files transparently. Uses a regex-built ID -> file map
+   * (cheap) and only fully parses files we actually need to pull a tree from
+   * (lazy). Both caches survive across `sendTreeData` calls until the file
+   * watcher invalidates them.
+   */
+  async resolveExternalSubtrees(parsed) {
+    if (!this.currentDocument) return parsed;
+    const docPath = this.currentDocument.uri.fsPath;
+    const knownIds = new Set(parsed.trees.map((t) => t.id));
+    const queue = [];
+    const enqueueRefs = (node) => {
+      if (node.category === "subtree") {
+        const idPort = node.ports.find((p) => p.name === "ID");
+        const treeName = idPort ? idPort.value : node.name;
+        if (treeName && !knownIds.has(treeName)) queue.push(treeName);
+      }
+      for (const child of node.children) enqueueRefs(child);
+    };
+    for (const tree of parsed.trees) enqueueRefs(tree.root);
+    if (queue.length === 0) return parsed;
+    const index = await this.getXmlIndex();
+    const idToFile = /* @__PURE__ */ new Map();
+    for (const [fp, ids] of index) {
+      if (fp === docPath) continue;
+      for (const id of ids) {
+        if (!idToFile.has(id)) idToFile.set(id, fp);
+      }
+    }
+    if (idToFile.size === 0) return parsed;
+    const decoder = new TextDecoder();
+    const getParsed = async (fp) => {
+      const cached = this.parsedFileCache.get(fp);
+      if (cached) return cached;
+      try {
+        const bytes = await vscode.workspace.fs.readFile(vscode.Uri.file(fp));
+        const sp = parseBTXml(decoder.decode(bytes), { resetIds: false });
+        this.parsedFileCache.set(fp, sp);
+        return sp;
+      } catch {
+        return void 0;
+      }
+    };
+    while (queue.length > 0) {
+      const id = queue.shift();
+      if (knownIds.has(id)) continue;
+      const fp = idToFile.get(id);
+      if (!fp) continue;
+      const sp = await getParsed(fp);
+      if (!sp) continue;
+      const tree = sp.trees.find((t) => t.id === id);
+      if (!tree) continue;
+      tree.sourceFile = fp;
+      parsed.trees.push(tree);
+      knownIds.add(id);
+      enqueueRefs(tree.root);
+    }
+    return parsed;
+  }
   stopMonitor() {
     if (this.monitor) {
       this.monitor.stop();
@@ -2668,13 +2761,13 @@ var BTViewerPanel = class _BTViewerPanel {
       this.panel.webview.postMessage({ command: "monitorStopped" });
     }
   }
-  sendTreeData() {
+  async sendTreeData() {
     if (!this.currentDocument) return;
     try {
+      const docPath = this.currentDocument.uri.fsPath;
       let parsed = parseBTXml(this.currentDocument.getText());
-      if (this.expandSubtreesEnabled) {
-        parsed = expandSubtrees(parsed);
-      }
+      for (const tree of parsed.trees) tree.sourceFile = docPath;
+      parsed = await this.resolveExternalSubtrees(parsed);
       this.panel.webview.postMessage({
         command: "updateTree",
         data: parsed,
@@ -2729,7 +2822,6 @@ var BTViewerPanel = class _BTViewerPanel {
     <button id="btn-collapse-all" class="toolbar-btn" title="Collapse to depth">Min</button>
     <label class="toolbar-hint" title="Auto-collapse depth for large trees">Depth <input id="depth-input" type="number" min="1" max="20" value="3" class="toolbar-input depth-input" /></label>
     <span id="monitor-status" class="toolbar-hint"></span>
-    <button id="btn-expand-subtrees" class="toolbar-btn" title="Expand SubTrees inline">SubTrees</button>
     <button id="btn-blackboard" class="toolbar-btn" title="Toggle Blackboard panel">BB</button>
     <button id="btn-palette" class="toolbar-btn" title="Toggle Node Palette">Palette</button>
     <button id="btn-fit" class="toolbar-btn" title="Fit to View (F)">Fit</button>

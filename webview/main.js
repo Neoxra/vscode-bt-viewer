@@ -85,6 +85,10 @@
   let dragOffsetY = 0;
 
   let collapsedNodes = new Set();
+  // Per-node SubTree expansion. Keys are *layout* node ids so the same
+  // referenced tree can be expanded in multiple places without colliding;
+  // see buildLayoutTree() for how layout ids are namespaced.
+  let expandedSubtrees = new Set();
   let layoutNodes = [];
   let layoutEdges = [];
 
@@ -113,7 +117,6 @@
   const btnExportPdf = document.getElementById("btn-export-pdf");
   const btnZoomIn = document.getElementById("btn-zoom-in");
   const btnZoomOut = document.getElementById("btn-zoom-out");
-  const btnExpandSubtrees = document.getElementById("btn-expand-subtrees");
   const treeSelector = document.getElementById("tree-selector");
   const searchInput = document.getElementById("search-input");
   const searchCount = document.getElementById("search-count");
@@ -502,12 +505,54 @@
 
   // ------ RENDERING ------
 
+  /**
+   * Build a layout-time copy of a tree where SubTree nodes that the user has
+   * expanded inline the referenced tree's children as their own. Node ids are
+   * namespaced by path so the same referenced tree can be expanded in
+   * multiple places without colliding. Original parser nodes are NOT
+   * mutated; the returned tree is a fresh structure for layout to consume.
+   */
+  function buildLayoutTree(node, pathPrefix, visited, sourceFile) {
+    const layoutId = pathPrefix ? `${pathPrefix}/${node.id}` : node.id;
+    const out = { ...node, id: layoutId, _origId: node.id, _sourceFile: sourceFile };
+    if (
+      node.category === "subtree" &&
+      expandedSubtrees.has(layoutId) &&
+      treeData && treeData.trees
+    ) {
+      const refName = (node.ports.find(p => p.name === "ID") || {}).value || node.name;
+      const refTree = treeData.trees.find(t => t.id === refName);
+      if (refTree && refTree.root && !visited.has(refName)) {
+        const nextVisited = new Set(visited); nextVisited.add(refName);
+        const childSourceFile = refTree.sourceFile || sourceFile;
+        out.children = (refTree.root.children || []).map(
+          c => buildLayoutTree(c, layoutId, nextVisited, childSourceFile)
+        );
+        return out;
+      }
+    }
+    out.children = (node.children || []).map(c => buildLayoutTree(c, pathPrefix, visited, sourceFile));
+    return out;
+  }
+
   function render() {
     if (!treeData || !treeData.trees || treeData.trees.length === 0) return;
 
     const treeId = selectedTreeId || treeData.mainTreeId;
-    const mainTree = treeData.trees.find(t => t.id === treeId) || treeData.trees[0];
-    if (!mainTree || !mainTree.root) return;
+    const mainTreeRaw = treeData.trees.find(t => t.id === treeId) || treeData.trees[0];
+    if (!mainTreeRaw || !mainTreeRaw.root) return;
+
+    // Build layout tree with SubTree expansions inlined. The source file
+    // propagates so every layout node knows which file its line refers to.
+    const mainTree = {
+      id: mainTreeRaw.id,
+      root: buildLayoutTree(
+        mainTreeRaw.root,
+        "",
+        new Set([mainTreeRaw.id]),
+        mainTreeRaw.sourceFile,
+      ),
+    };
 
     // When viewing a subtree (not the main tree), mark root as subtree category
     // so it keeps the purple color matching the SubTree reference node
@@ -638,9 +683,25 @@
       }
     }
 
-    // Collapse/expand chevron button
-    if (node.children && node.children.length > 0) {
+    // Whether this node is a SubTree whose referenced tree is resolved -- we
+    // give those a chevron too (to inline / re-collapse their children), even
+    // though SubTree nodes have no inline children of their own.
+    const isExpandableSubtree =
+      node.category === "subtree" &&
+      treeData && treeData.trees &&
+      (() => {
+        const refName = (node.ports.find(p => p.name === "ID") || {}).value || node.name;
+        return refName && treeData.trees.some(t => t.id === refName);
+      })();
+    const isSubtreeExpanded = isExpandableSubtree && expandedSubtrees.has(node.id);
+
+    // Collapse/expand chevron button. SubTree nodes get a chevron whenever
+    // their reference resolves; regular nodes get one when they have children.
+    if ((node.children && node.children.length > 0) || isExpandableSubtree) {
       const isCollapsed = collapsedNodes.has(node.id);
+      // Open == chevron points down (children visible). For SubTrees, "open"
+      // means we've inlined the referenced tree.
+      const isOpen = isExpandableSubtree ? isSubtreeExpanded : !isCollapsed;
 
       // Clickable hit area for the chevron
       const chevronHit = document.createElementNS("http://www.w3.org/2000/svg", "rect");
@@ -658,18 +719,22 @@
       chevron.setAttribute("text-anchor", "middle");
       chevron.setAttribute("class", "collapse-chevron");
       chevron.setAttribute("fill", color.text);
-      chevron.textContent = isCollapsed ? "\u25B6" : "\u25BC";
+      chevron.textContent = isOpen ? "\u25BC" : "\u25B6";
       g.appendChild(chevron);
 
-      // Click chevron to toggle collapse
+      // Click chevron to toggle. For SubTree nodes we flip expandedSubtrees
+      // (which triggers buildLayoutTree to inline the reference on next
+      // render); for regular nodes we keep the original collapsedNodes flow.
       function toggleCollapse(ev) {
         ev.stopPropagation();
         const oldX = node._x;
         const oldY = node._y;
-        if (collapsedNodes.has(node.id)) {
-          collapsedNodes.delete(node.id);
+        if (isExpandableSubtree) {
+          if (expandedSubtrees.has(node.id)) expandedSubtrees.delete(node.id);
+          else expandedSubtrees.add(node.id);
         } else {
-          collapsedNodes.add(node.id);
+          if (collapsedNodes.has(node.id)) collapsedNodes.delete(node.id);
+          else collapsedNodes.add(node.id);
         }
         const savedZoom = zoom;
         render();
@@ -734,10 +799,16 @@
       const dist = Math.abs(e.clientX - clickStartX) + Math.abs(e.clientY - clickStartY);
       if (dist >= 5) return;
       // Ctrl/Cmd-click jumps to where this node is defined in the XML
-      // source. Plain click still opens the side detail panel.
+      // source. Each node carries its own source file (set by buildLayoutTree)
+      // so clicks on nodes inlined from a SubTree open the referenced file,
+      // while the SubTree node itself opens its call site in the main file.
       if (e.ctrlKey || e.metaKey) {
         if (node.xmlLine) {
-          vscode.postMessage({ command: "goToLine", line: node.xmlLine });
+          vscode.postMessage({
+            command: "goToLine",
+            line: node.xmlLine,
+            file: node._sourceFile,
+          });
         }
         return;
       }
@@ -1221,10 +1292,6 @@
   btnZoomOut.addEventListener("click", () => {
     zoom = Math.max(0.1, zoom / 1.2);
     updateTransform();
-  });
-  btnExpandSubtrees.addEventListener("click", () => {
-    btnExpandSubtrees.classList.toggle("active");
-    vscode.postMessage({ command: "toggleSubtrees" });
   });
   if (btnExportPdf) {
     btnExportPdf.addEventListener("click", exportTreeToPdf);
@@ -1718,7 +1785,11 @@
       if (node.xmlLine) {
         sidePanelGoto.title = `Go to source line ${node.xmlLine} (or ${MODIFIER_CLICK_LABEL} the node)`;
         sidePanelGoto.onclick = () => {
-          vscode.postMessage({ command: "goToLine", line: node.xmlLine });
+          vscode.postMessage({
+            command: "goToLine",
+            line: node.xmlLine,
+            file: node._sourceFile,
+          });
         };
         sidePanelGoto.classList.remove("hidden");
       } else {

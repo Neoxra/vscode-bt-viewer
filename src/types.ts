@@ -27,6 +27,10 @@ export interface BTNodeData {
 export interface BTTreeData {
   id: string;
   root: BTNodeData;
+  /** Absolute path of the file this tree was parsed from. Used by the
+   * goToLine message so the host opens the correct file when the user
+   * Ctrl+clicks a node from a cross-file SubTree. */
+  sourceFile?: string;
 }
 
 export interface BTParsedFile {

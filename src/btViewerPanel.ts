@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import * as path from "path";
-import { parseBTXml, expandSubtrees } from "./btParser";
-import { BTParsedFile } from "./types";
+import { parseBTXml } from "./btParser";
+import { BTParsedFile, BTNodeData } from "./types";
 import { BTMonitor } from "./btMonitor";
 
 function debounce<T extends (...args: any[]) => void>(fn: T, ms: number): T {
@@ -20,8 +20,13 @@ export class BTViewerPanel {
   private readonly extensionUri: vscode.Uri;
   private disposables: vscode.Disposable[] = [];
   private currentDocument: vscode.TextDocument | undefined;
-  private expandSubtreesEnabled = false;
   private monitor: BTMonitor | null = null;
+  // Caches for cross-file SubTree resolution. xmlIndex is a path -> tree IDs
+  // map (built via regex over all .xml in the workspace); parsedFiles caches
+  // full parses of files we actually pulled trees from. Both are invalidated
+  // by the file system watcher on .xml changes.
+  private xmlIndex: Map<string, string[]> | undefined;
+  private parsedFileCache = new Map<string, BTParsedFile>();
 
   public static createOrShow(extensionUri: vscode.Uri, document: vscode.TextDocument) {
     const column = vscode.ViewColumn.Active;
@@ -62,27 +67,38 @@ export class BTViewerPanel {
       (message) => {
         switch (message.command) {
           case "goToLine":
-            if (this.currentDocument && message.line) {
+            if (message.line) {
               const lineNum = Math.max(0, message.line - 1);
               const range = new vscode.Range(lineNum, 0, lineNum, Number.MAX_SAFE_INTEGER);
-              // Reuse the existing editor if the document is already visible
-              // somewhere, otherwise open beside the viewer. This stops every
-              // Ctrl+click from spawning a fresh column to the right.
-              const docUri = this.currentDocument.uri.toString();
-              const existing = vscode.window.visibleTextEditors.find(
-                (e) => e.document.uri.toString() === docUri
-              );
-              vscode.window.showTextDocument(this.currentDocument, {
+              // Each node now carries its own source file (set when the tree
+              // is parsed / resolved). Fall back to currentDocument for
+              // legacy callers (live monitor nodes have no source file).
+              const targetUri = message.file
+                ? vscode.Uri.file(message.file)
+                : this.currentDocument?.uri;
+              if (!targetUri) break;
+              const viewerColumn = this.panel.viewColumn;
+
+              // Two-pane model: viewer in one column, source always in the
+              // other. Pick the first tab group that isn't the viewer's. If
+              // none exists yet, Beside creates a second column. We don't
+              // search per-file -- showTextDocument(uri, viewColumn) reuses
+              // any existing tab in that column for this URI automatically.
+              let targetColumn: vscode.ViewColumn | undefined;
+              for (const group of vscode.window.tabGroups.all) {
+                if (group.viewColumn !== viewerColumn) {
+                  targetColumn = group.viewColumn;
+                  break;
+                }
+              }
+
+              vscode.window.showTextDocument(targetUri, {
                 selection: range,
-                viewColumn: existing ? existing.viewColumn : vscode.ViewColumn.Beside,
+                viewColumn: targetColumn ?? vscode.ViewColumn.Beside,
                 preserveFocus: false,
                 preview: false,
               });
             }
-            break;
-          case "toggleSubtrees":
-            this.expandSubtreesEnabled = !this.expandSubtreesEnabled;
-            this.sendTreeData();
             break;
           case "startMonitor": {
             const config = vscode.workspace.getConfiguration("behaviortreeViewer");
@@ -123,6 +139,21 @@ export class BTViewerPanel {
       this.disposables
     );
 
+    // Watch every .xml in the workspace so the SubTree resolver's caches
+    // stay coherent across edits / new files / deletes. Surgical invalidates
+    // when possible; full rebuild only when files appear or disappear.
+    const watcher = vscode.workspace.createFileSystemWatcher("**/*.xml");
+    watcher.onDidChange((uri) => {
+      this.xmlIndex?.delete(uri.fsPath);
+      this.parsedFileCache.delete(uri.fsPath);
+    });
+    watcher.onDidCreate(() => { this.xmlIndex = undefined; });
+    watcher.onDidDelete((uri) => {
+      this.xmlIndex?.delete(uri.fsPath);
+      this.parsedFileCache.delete(uri.fsPath);
+    });
+    this.disposables.push(watcher);
+
     this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
   }
 
@@ -161,13 +192,10 @@ export class BTViewerPanel {
         });
       },
       onTree: (xml) => {
-        // Parse the live tree (contains _uid attributes for correct status matching)
-        // Respect the user's SubTrees expand preference
+        // Parse the live tree (contains _uid attributes for correct status matching).
+        // SubTree expansion is now per-node in the webview, not a global flag.
         try {
-          let parsed = parseBTXml(xml);
-          if (this.expandSubtreesEnabled) {
-            parsed = expandSubtrees(parsed);
-          }
+          const parsed = parseBTXml(xml);
           this.panel.webview.postMessage({
             command: "updateTree",
             data: parsed,
@@ -183,6 +211,108 @@ export class BTViewerPanel {
     this.monitor.start(host, port);
   }
 
+  /**
+   * Workspace-scoped index of `<BehaviorTree ID="X">` declarations across
+   * all .xml files. Built lazily on first need via regex (no full parse) and
+   * cached on the instance. Invalidated surgically by the file system watcher
+   * when individual files change; fully rebuilt when files are added.
+   */
+  private async getXmlIndex(): Promise<Map<string, string[]>> {
+    if (this.xmlIndex) return this.xmlIndex;
+    const index = new Map<string, string[]>();
+    const xmlFiles = await vscode.workspace.findFiles(
+      "**/*.xml",
+      "**/{node_modules,build,install,dist,.git,.venv,venv}/**",
+      2000,
+    );
+    const decoder = new TextDecoder();
+    const ID_RE = /<BehaviorTree\s+ID="([^"]+)"/g;
+    await Promise.all(
+      xmlFiles.map(async (uri) => {
+        try {
+          const text = decoder.decode(await vscode.workspace.fs.readFile(uri));
+          if (!text.includes("<BehaviorTree")) return;
+          const ids: string[] = [];
+          for (const m of text.matchAll(ID_RE)) ids.push(m[1]);
+          if (ids.length > 0) index.set(uri.fsPath, ids);
+        } catch {
+          // Unreadable file: skip silently.
+        }
+      }),
+    );
+    this.xmlIndex = index;
+    return index;
+  }
+
+  /**
+   * Merge SubTree definitions from anywhere in the workspace into the parsed
+   * tree pool, so the tree-selector dropdown and "View SubTree" button can
+   * navigate across files transparently. Uses a regex-built ID -> file map
+   * (cheap) and only fully parses files we actually need to pull a tree from
+   * (lazy). Both caches survive across `sendTreeData` calls until the file
+   * watcher invalidates them.
+   */
+  private async resolveExternalSubtrees(parsed: BTParsedFile): Promise<BTParsedFile> {
+    if (!this.currentDocument) return parsed;
+    const docPath = this.currentDocument.uri.fsPath;
+
+    // Collect unresolved SubTree references from the main parse.
+    const knownIds = new Set(parsed.trees.map((t) => t.id));
+    const queue: string[] = [];
+    const enqueueRefs = (node: BTNodeData) => {
+      if (node.category === "subtree") {
+        const idPort = node.ports.find((p) => p.name === "ID");
+        const treeName = idPort ? idPort.value : node.name;
+        if (treeName && !knownIds.has(treeName)) queue.push(treeName);
+      }
+      for (const child of node.children) enqueueRefs(child);
+    };
+    for (const tree of parsed.trees) enqueueRefs(tree.root);
+    if (queue.length === 0) return parsed;
+
+    // Build / fetch the workspace ID index, then invert to id -> file lookup.
+    const index = await this.getXmlIndex();
+    const idToFile = new Map<string, string>();
+    for (const [fp, ids] of index) {
+      if (fp === docPath) continue;
+      for (const id of ids) {
+        if (!idToFile.has(id)) idToFile.set(id, fp);
+      }
+    }
+    if (idToFile.size === 0) return parsed;
+
+    const decoder = new TextDecoder();
+    const getParsed = async (fp: string): Promise<BTParsedFile | undefined> => {
+      const cached = this.parsedFileCache.get(fp);
+      if (cached) return cached;
+      try {
+        const bytes = await vscode.workspace.fs.readFile(vscode.Uri.file(fp));
+        const sp = parseBTXml(decoder.decode(bytes), { resetIds: false });
+        this.parsedFileCache.set(fp, sp);
+        return sp;
+      } catch {
+        return undefined;
+      }
+    };
+
+    while (queue.length > 0) {
+      const id = queue.shift()!;
+      if (knownIds.has(id)) continue;
+      const fp = idToFile.get(id);
+      if (!fp) continue;
+      const sp = await getParsed(fp);
+      if (!sp) continue;
+      const tree = sp.trees.find((t) => t.id === id);
+      if (!tree) continue;
+      tree.sourceFile = fp;
+      parsed.trees.push(tree);
+      knownIds.add(id);
+      enqueueRefs(tree.root);
+    }
+
+    return parsed;
+  }
+
   private stopMonitor() {
     if (this.monitor) {
       this.monitor.stop();
@@ -191,14 +321,14 @@ export class BTViewerPanel {
     }
   }
 
-  private sendTreeData() {
+  private async sendTreeData() {
     if (!this.currentDocument) return;
 
     try {
+      const docPath = this.currentDocument.uri.fsPath;
       let parsed: BTParsedFile = parseBTXml(this.currentDocument.getText());
-      if (this.expandSubtreesEnabled) {
-        parsed = expandSubtrees(parsed);
-      }
+      for (const tree of parsed.trees) tree.sourceFile = docPath;
+      parsed = await this.resolveExternalSubtrees(parsed);
       this.panel.webview.postMessage({
         command: "updateTree",
         data: parsed,
@@ -254,7 +384,6 @@ export class BTViewerPanel {
     <button id="btn-collapse-all" class="toolbar-btn" title="Collapse to depth">Min</button>
     <label class="toolbar-hint" title="Auto-collapse depth for large trees">Depth <input id="depth-input" type="number" min="1" max="20" value="3" class="toolbar-input depth-input" /></label>
     <span id="monitor-status" class="toolbar-hint"></span>
-    <button id="btn-expand-subtrees" class="toolbar-btn" title="Expand SubTrees inline">SubTrees</button>
     <button id="btn-blackboard" class="toolbar-btn" title="Toggle Blackboard panel">BB</button>
     <button id="btn-palette" class="toolbar-btn" title="Toggle Node Palette">Palette</button>
     <button id="btn-fit" class="toolbar-btn" title="Fit to View (F)">Fit</button>
