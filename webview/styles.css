@@ -224,6 +224,12 @@ body {
   font-size: 11px;
 }
 
+.side-panel-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
 #side-panel-content {
   flex: 1;
   overflow-y: auto;
@@ -363,6 +369,17 @@ body {
   stroke: var(--status-search) !important;
   stroke-width: 2.5 !important;
   filter: drop-shadow(0 0 6px var(--status-search));
+}
+
+/* Ctrl/Cmd-hold hyperlink hint: matches VSCode's editor "go to definition"
+   convention, where holding the modifier turns text into a clickable link. */
+body.ctrl-held .bt-node rect {
+  cursor: pointer;
+}
+body.ctrl-held .bt-node:hover rect {
+  stroke: var(--bt-accent) !important;
+  stroke-width: 2.5;
+  filter: drop-shadow(0 0 8px var(--bt-accent));
 }
 
 .bt-node.search-dim {

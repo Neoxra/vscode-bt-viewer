@@ -2093,6 +2093,41 @@ var nodeIdCounter = 0;
 function nextId() {
   return `node_${nodeIdCounter++}`;
 }
+function buildTagCursor(xml) {
+  const lineStarts = [0];
+  for (let i2 = 0; i2 < xml.length; i2++) {
+    if (xml.charCodeAt(i2) === 10) lineStarts.push(i2 + 1);
+  }
+  const lineOf = (offset) => {
+    let lo = 0;
+    let hi = lineStarts.length - 1;
+    while (lo < hi) {
+      const mid = lo + hi + 1 >> 1;
+      if (lineStarts[mid] <= offset) lo = mid;
+      else hi = mid - 1;
+    }
+    return lo + 1;
+  };
+  const skipEnd = xml.indexOf("</TreeNodesModel>");
+  const minIdx = skipEnd >= 0 ? skipEnd : 0;
+  const tags = [];
+  const tagRe = /<(\w+)(?=[\s/>])/g;
+  let m;
+  while (m = tagRe.exec(xml)) {
+    if (m.index < minIdx) continue;
+    tags.push({ tagName: m[1], line: lineOf(m.index) });
+  }
+  let i = 0;
+  return {
+    consume(tagName) {
+      while (i < tags.length) {
+        const t = tags[i++];
+        if (t.tagName === tagName) return t.line;
+      }
+      return void 0;
+    }
+  };
+}
 function categorizeNode(tagName, nodeModels) {
   if (tagName === "BehaviorTree" || tagName === "root") return "root";
   if (tagName === "SubTree" || tagName === "SubTreePlus") return "subtree";
@@ -2149,7 +2184,8 @@ function getAttrs(el) {
 function getChildren(el, tagName) {
   return Array.isArray(el[tagName]) ? el[tagName] : [];
 }
-function parseNodeElement(el, tagName, nodeModels, portModels) {
+function parseNodeElement(el, tagName, nodeModels, portModels, cursor) {
+  const xmlLine = cursor.consume(tagName);
   const attrs = getAttrs(el);
   const category = categorizeNode(tagName, nodeModels);
   const ports = extractPorts(attrs, portModels, tagName);
@@ -2178,7 +2214,7 @@ function parseNodeElement(el, tagName, nodeModels, portModels) {
   for (const childEl of childElements) {
     const childTag = getTagName(childEl);
     if (!childTag || childTag === "#text") continue;
-    children.push(parseNodeElement(childEl, childTag, nodeModels, portModels));
+    children.push(parseNodeElement(childEl, childTag, nodeModels, portModels, cursor));
   }
   return {
     id: nextId(),
@@ -2187,7 +2223,8 @@ function parseNodeElement(el, tagName, nodeModels, portModels) {
     category,
     ports,
     children,
-    uid
+    uid,
+    xmlLine
   };
 }
 function parseTreeNodesModel(rootChildren) {
@@ -2236,6 +2273,7 @@ function parseTreeNodesModel(rootChildren) {
 }
 function parseBTXml(xmlContent) {
   nodeIdCounter = 0;
+  const cursor = buildTagCursor(xmlContent);
   const parser = new import_fast_xml_parser.XMLParser({
     ignoreAttributes: false,
     attributeNamePrefix: "@_",
@@ -2263,7 +2301,7 @@ function parseBTXml(xmlContent) {
     for (const childEl of btChildren) {
       const childTag = getTagName(childEl);
       if (!childTag || childTag === "#text") continue;
-      rootNode = parseNodeElement(childEl, childTag, modelMap, portModelMap);
+      rootNode = parseNodeElement(childEl, childTag, modelMap, portModelMap, cursor);
       break;
     }
     if (rootNode) {
@@ -2515,10 +2553,17 @@ var BTViewerPanel = class _BTViewerPanel {
         switch (message.command) {
           case "goToLine":
             if (this.currentDocument && message.line) {
-              const range = new vscode.Range(message.line - 1, 0, message.line - 1, 0);
+              const lineNum = Math.max(0, message.line - 1);
+              const range = new vscode.Range(lineNum, 0, lineNum, Number.MAX_SAFE_INTEGER);
+              const docUri = this.currentDocument.uri.toString();
+              const existing = vscode.window.visibleTextEditors.find(
+                (e) => e.document.uri.toString() === docUri
+              );
               vscode.window.showTextDocument(this.currentDocument, {
                 selection: range,
-                viewColumn: vscode.ViewColumn.One
+                viewColumn: existing ? existing.viewColumn : vscode.ViewColumn.Beside,
+                preserveFocus: false,
+                preview: false
               });
             }
             break;
@@ -2696,7 +2741,10 @@ var BTViewerPanel = class _BTViewerPanel {
     <div id="side-panel" class="hidden">
       <div id="side-panel-header">
         <span id="side-panel-title"></span>
-        <button id="side-panel-close" class="toolbar-btn side-panel-close-btn">x</button>
+        <div class="side-panel-header-actions">
+          <button id="side-panel-goto" class="toolbar-btn side-panel-close-btn hidden" title="">Go to</button>
+          <button id="side-panel-close" class="toolbar-btn side-panel-close-btn">x</button>
+        </div>
       </div>
       <div id="side-panel-content"></div>
     </div>

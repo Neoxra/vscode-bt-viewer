@@ -11,6 +11,18 @@
   // @ts-ignore
   const vscode = acquireVsCodeApi();
 
+  // Host platform, resolved once on load. Linux is the primary target; Mac
+  // and Windows are detected so the Ctrl/Cmd tooltip label reads correctly.
+  // Anything else falls through to LINUX (Ctrl convention).
+  const Platform = Object.freeze({ LINUX: "linux", MAC: "mac", WINDOWS: "windows" });
+  const PLATFORM = (() => {
+    const p = navigator.platform || "";
+    if (/Mac/i.test(p)) return Platform.MAC;
+    if (/Win/i.test(p)) return Platform.WINDOWS;
+    return Platform.LINUX;
+  })();
+  const MODIFIER_CLICK_LABEL = PLATFORM === Platform.MAC ? "Cmd+click" : "Ctrl+click";
+
   // Layout constants
   const NODE_H = 32;
   const NODE_MIN_W = 80;
@@ -109,6 +121,7 @@
   const sidePanel = document.getElementById("side-panel");
   const sidePanelTitle = document.getElementById("side-panel-title");
   const sidePanelContent = document.getElementById("side-panel-content");
+  const sidePanelGoto = document.getElementById("side-panel-goto");
   const sidePanelClose = document.getElementById("side-panel-close");
 
   const btnLayoutToggle = document.getElementById("btn-layout-toggle");
@@ -718,9 +731,16 @@
     g.addEventListener("click", (e) => {
       e.stopPropagation();
       const dist = Math.abs(e.clientX - clickStartX) + Math.abs(e.clientY - clickStartY);
-      if (dist < 5) {
-        showNodeDetail(node);
+      if (dist >= 5) return;
+      // Ctrl/Cmd-click jumps to where this node is defined in the XML
+      // source. Plain click still opens the side detail panel.
+      if (e.ctrlKey || e.metaKey) {
+        if (node.xmlLine) {
+          vscode.postMessage({ command: "goToLine", line: node.xmlLine });
+        }
+        return;
       }
+      showNodeDetail(node);
     });
 
 
@@ -1331,6 +1351,7 @@
     activeSidePanel = "blackboard";
     btnBlackboard.classList.add("active");
     btnPalette.classList.remove("active");
+    hideGotoButton();
   }
 
   // ------ NODE PALETTE ------
@@ -1409,6 +1430,7 @@
     activeSidePanel = "palette";
     btnPalette.classList.add("active");
     btnBlackboard.classList.remove("active");
+    hideGotoButton();
 
     // Wire up help button toggles (node descriptions)
     sidePanelContent.querySelectorAll(".palette-help-btn[data-desc-type]").forEach(btn => {
@@ -1445,6 +1467,11 @@
     activeSidePanel = null;
     btnBlackboard.classList.remove("active");
     btnPalette.classList.remove("active");
+    if (sidePanelGoto) sidePanelGoto.classList.add("hidden");
+  }
+
+  function hideGotoButton() {
+    if (sidePanelGoto) sidePanelGoto.classList.add("hidden");
   }
 
   // Side panel buttons
@@ -1557,6 +1584,21 @@
         if (childNode) showNodeDetail(childNode);
       });
     });
+
+    // Header "Go to" button: small mouse-only alternative to Ctrl/Cmd-click.
+    // Only visible when the parser resolved a source line for this node.
+    if (sidePanelGoto) {
+      if (node.xmlLine) {
+        sidePanelGoto.title = `Go to source line ${node.xmlLine} (or ${MODIFIER_CLICK_LABEL} the node)`;
+        sidePanelGoto.onclick = () => {
+          vscode.postMessage({ command: "goToLine", line: node.xmlLine });
+        };
+        sidePanelGoto.classList.remove("hidden");
+      } else {
+        sidePanelGoto.classList.add("hidden");
+        sidePanelGoto.onclick = null;
+      }
+    }
 
     // View SubTree button: switch main view to that tree
     const viewBtn = sidePanelContent.querySelector("#btn-view-subtree");
@@ -1811,6 +1853,19 @@
     }
     drawMinimap();
   }
+
+  // Ctrl/Cmd hover hint: while the modifier is held, nodes get a hyperlink
+  // cursor and a focus-tinted outline so it's clear they're click-to-jump.
+  function setCtrlHeld(held) {
+    document.body.classList.toggle("ctrl-held", held);
+  }
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "Control" || e.key === "Meta") setCtrlHeld(true);
+  });
+  window.addEventListener("keyup", (e) => {
+    if (e.key === "Control" || e.key === "Meta") setCtrlHeld(false);
+  });
+  window.addEventListener("blur", () => setCtrlHeld(false));
 
   // Keyboard shortcuts
   window.addEventListener("keydown", (e) => {

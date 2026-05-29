@@ -60,10 +60,20 @@ export class BTViewerPanel {
         switch (message.command) {
           case "goToLine":
             if (this.currentDocument && message.line) {
-              const range = new vscode.Range(message.line - 1, 0, message.line - 1, 0);
+              const lineNum = Math.max(0, message.line - 1);
+              const range = new vscode.Range(lineNum, 0, lineNum, Number.MAX_SAFE_INTEGER);
+              // Reuse the existing editor if the document is already visible
+              // somewhere, otherwise open beside the viewer. This stops every
+              // Ctrl+click from spawning a fresh column to the right.
+              const docUri = this.currentDocument.uri.toString();
+              const existing = vscode.window.visibleTextEditors.find(
+                (e) => e.document.uri.toString() === docUri
+              );
               vscode.window.showTextDocument(this.currentDocument, {
                 selection: range,
-                viewColumn: vscode.ViewColumn.One,
+                viewColumn: existing ? existing.viewColumn : vscode.ViewColumn.Beside,
+                preserveFocus: false,
+                preview: false,
               });
             }
             break;
@@ -256,7 +266,10 @@ export class BTViewerPanel {
     <div id="side-panel" class="hidden">
       <div id="side-panel-header">
         <span id="side-panel-title"></span>
-        <button id="side-panel-close" class="toolbar-btn side-panel-close-btn">x</button>
+        <div class="side-panel-header-actions">
+          <button id="side-panel-goto" class="toolbar-btn side-panel-close-btn hidden" title="">Go to</button>
+          <button id="side-panel-close" class="toolbar-btn side-panel-close-btn">x</button>
+        </div>
       </div>
       <div id="side-panel-content"></div>
     </div>

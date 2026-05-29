@@ -22,6 +22,57 @@ function nextId(): string {
   return `node_${nodeIdCounter++}`;
 }
 
+/**
+ * Tag-position cursor. fast-xml-parser doesn't expose source offsets, so we
+ * rescan the raw XML for opening-tag positions and walk that list in lockstep
+ * with the parser's document-order traversal. Each call to `consume(tagName)`
+ * returns the source line of the next matching opening tag.
+ */
+interface TagCursor {
+  consume(tagName: string): number | undefined;
+}
+
+function buildTagCursor(xml: string): TagCursor {
+  // Build line-start offsets for O(log n) line lookup.
+  const lineStarts: number[] = [0];
+  for (let i = 0; i < xml.length; i++) {
+    if (xml.charCodeAt(i) === 10) lineStarts.push(i + 1);
+  }
+  const lineOf = (offset: number): number => {
+    let lo = 0;
+    let hi = lineStarts.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (lineStarts[mid] <= offset) lo = mid; else hi = mid - 1;
+    }
+    return lo + 1; // 1-based
+  };
+
+  // Skip past the TreeNodesModel block so its sample-shape <Action ID="..."/>
+  // tags don't poison the cursor when the real tree references the same name.
+  const skipEnd = xml.indexOf("</TreeNodesModel>");
+  const minIdx = skipEnd >= 0 ? skipEnd : 0;
+
+  const tags: Array<{ tagName: string; line: number }> = [];
+  const tagRe = /<(\w+)(?=[\s/>])/g;
+  let m: RegExpExecArray | null;
+  while ((m = tagRe.exec(xml))) {
+    if (m.index < minIdx) continue;
+    tags.push({ tagName: m[1], line: lineOf(m.index) });
+  }
+
+  let i = 0;
+  return {
+    consume(tagName: string): number | undefined {
+      while (i < tags.length) {
+        const t = tags[i++];
+        if (t.tagName === tagName) return t.line;
+      }
+      return undefined;
+    },
+  };
+}
+
 export function categorizeNode(tagName: string, nodeModels: Map<string, NodeCategory>): NodeCategory {
   if (tagName === "BehaviorTree" || tagName === "root") return "root";
   if (tagName === "SubTree" || tagName === "SubTreePlus") return "subtree";
@@ -97,7 +148,11 @@ function parseNodeElement(
   tagName: string,
   nodeModels: Map<string, NodeCategory>,
   portModels: Map<string, BTPortModel[]>,
+  cursor: TagCursor,
 ): BTNodeData {
+  // Pull the source line for this tag BEFORE descending into children so the
+  // cursor stays in document order with the parser's recursion.
+  const xmlLine = cursor.consume(tagName);
   const attrs = getAttrs(el);
   const category = categorizeNode(tagName, nodeModels);
   const ports = extractPorts(attrs, portModels, tagName);
@@ -134,7 +189,7 @@ function parseNodeElement(
   for (const childEl of childElements) {
     const childTag = getTagName(childEl);
     if (!childTag || childTag === "#text") continue;
-    children.push(parseNodeElement(childEl, childTag, nodeModels, portModels));
+    children.push(parseNodeElement(childEl, childTag, nodeModels, portModels, cursor));
   }
 
   return {
@@ -145,6 +200,7 @@ function parseNodeElement(
     ports,
     children,
     uid,
+    xmlLine,
   };
 }
 
@@ -204,6 +260,7 @@ function parseTreeNodesModel(
 
 export function parseBTXml(xmlContent: string): BTParsedFile {
   nodeIdCounter = 0;
+  const cursor = buildTagCursor(xmlContent);
 
   const parser = new XMLParser({
     ignoreAttributes: false,
@@ -244,7 +301,7 @@ export function parseBTXml(xmlContent: string): BTParsedFile {
     for (const childEl of btChildren) {
       const childTag = getTagName(childEl);
       if (!childTag || childTag === "#text") continue;
-      rootNode = parseNodeElement(childEl, childTag, modelMap, portModelMap);
+      rootNode = parseNodeElement(childEl, childTag, modelMap, portModelMap, cursor);
       break;
     }
 
