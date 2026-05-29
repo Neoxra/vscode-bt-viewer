@@ -39,17 +39,9 @@ export function activate(context: vscode.ExtensionContext) {
         return;
       }
 
-      // Quick check: is this a BT.CPP XML file?
-      const text = document.getText(new vscode.Range(0, 0, 15, 0));
-      if (!text.includes("BTCPP_format") && !text.includes("BehaviorTree")) {
-        const choice = await vscode.window.showWarningMessage(
-          "This file does not appear to be a BehaviorTree.CPP XML file. Open viewer anyway?",
-          "Yes",
-          "No"
-        );
-        if (choice !== "Yes") return;
-      }
-
+      // No upfront sniff: if the file isn't valid BT XML, parseBTXml in the
+      // panel throws and the webview's error overlay surfaces the parse
+      // failure. That's a single, less interruptive feedback path.
       BTViewerPanel.createOrShow(context.extensionUri, document);
     }
   );

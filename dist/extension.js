@@ -2810,15 +2810,6 @@ function activate(context) {
         );
         return;
       }
-      const text = document.getText(new vscode2.Range(0, 0, 15, 0));
-      if (!text.includes("BTCPP_format") && !text.includes("BehaviorTree")) {
-        const choice = await vscode2.window.showWarningMessage(
-          "This file does not appear to be a BehaviorTree.CPP XML file. Open viewer anyway?",
-          "Yes",
-          "No"
-        );
-        if (choice !== "Yes") return;
-      }
       BTViewerPanel.createOrShow(context.extensionUri, document);
     }
   );
