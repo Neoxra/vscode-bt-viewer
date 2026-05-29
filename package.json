@@ -90,7 +90,8 @@
     }
   },
   "scripts": {
-    "compile": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --external:zeromq --format=cjs --platform=node --sourcemap",
+    "copy-webview-vendor": "node -e \"const fs=require('fs'),path=require('path');const dest=path.join('webview','vendor');fs.mkdirSync(dest,{recursive:true});fs.copyFileSync(require.resolve('jspdf/dist/jspdf.umd.min.js'),path.join(dest,'jspdf.umd.min.js'));fs.copyFileSync(require.resolve('svg2pdf.js/dist/svg2pdf.umd.min.js'),path.join(dest,'svg2pdf.umd.min.js'));\"",
+    "compile": "npm run copy-webview-vendor && esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --external:zeromq --format=cjs --platform=node --sourcemap",
     "watch": "npm run compile -- --watch",
     "package": "npm run compile && vsce package --no-dependencies"
   },
@@ -102,6 +103,8 @@
   },
   "dependencies": {
     "fast-xml-parser": "^4.3.0",
+    "jspdf": "^4.2.1",
+    "svg2pdf.js": "^2.7.0",
     "zeromq": "^6.5.0"
   }
 }

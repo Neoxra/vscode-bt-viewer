@@ -39,7 +39,10 @@ export class BTViewerPanel {
       {
         enableScripts: true,
         retainContextWhenHidden: true,
-        localResourceRoots: [vscode.Uri.joinPath(extensionUri, "webview")],
+        localResourceRoots: [
+          vscode.Uri.joinPath(extensionUri, "webview"),
+          vscode.Uri.joinPath(extensionUri, "webview", "vendor"),
+        ],
       }
     );
 
@@ -92,6 +95,9 @@ export class BTViewerPanel {
             this.stopMonitor();
             break;
           case "fitToView":
+            break;
+          case "exportPdf":
+            this.handleExportPdf(message.bytes, message.fileName);
             break;
         }
       },
@@ -215,6 +221,12 @@ export class BTViewerPanel {
 
     const stylesUri = webviewUri("styles.css");
     const scriptUri = webviewUri("main.js");
+    const jspdfUri = this.panel.webview.asWebviewUri(
+      vscode.Uri.joinPath(this.extensionUri, "webview", "vendor", "jspdf.umd.min.js")
+    );
+    const svg2pdfUri = this.panel.webview.asWebviewUri(
+      vscode.Uri.joinPath(this.extensionUri, "webview", "vendor", "svg2pdf.umd.min.js")
+    );
     const nonce = getNonce();
 
     return /* html */ `<!DOCTYPE html>
@@ -246,6 +258,7 @@ export class BTViewerPanel {
     <button id="btn-blackboard" class="toolbar-btn" title="Toggle Blackboard panel">BB</button>
     <button id="btn-palette" class="toolbar-btn" title="Toggle Node Palette">Palette</button>
     <button id="btn-fit" class="toolbar-btn" title="Fit to View (F)">Fit</button>
+    <button id="btn-export-pdf" class="toolbar-btn" title="Export an exact snapshot of the current view (theme colours, layout, expanded/collapsed nodes) as a PDF">Export to PDF</button>
     <button id="btn-zoom-in" class="toolbar-btn" title="Zoom In (+)">+</button>
     <button id="btn-zoom-out" class="toolbar-btn" title="Zoom Out (-)">-</button>
     <span id="zoom-level" class="toolbar-item">100%</span>
@@ -278,9 +291,43 @@ export class BTViewerPanel {
   <div id="error-overlay" class="hidden">
     <div id="error-message"></div>
   </div>
+  <script nonce="${nonce}" src="${jspdfUri}"></script>
+  <script nonce="${nonce}" src="${svg2pdfUri}"></script>
   <script nonce="${nonce}" src="${scriptUri}"></script>
 </body>
 </html>`;
+  }
+
+  private async handleExportPdf(bytes: number[] | undefined, fileName: string | undefined) {
+    if (!bytes || !Array.isArray(bytes) || bytes.length === 0) {
+      vscode.window.showErrorMessage("BT Viewer: PDF export produced no data");
+      return;
+    }
+    const baseName = (fileName || "behavior-tree").replace(/\.pdf$/i, "");
+    const sourceDir = this.currentDocument
+      ? path.dirname(this.currentDocument.uri.fsPath)
+      : undefined;
+    const defaultUri = sourceDir
+      ? vscode.Uri.file(path.join(sourceDir, `${baseName}.pdf`))
+      : vscode.Uri.file(`${baseName}.pdf`);
+    const target = await vscode.window.showSaveDialog({
+      defaultUri,
+      filters: { PDF: ["pdf"] },
+      saveLabel: "Export PDF",
+    });
+    if (!target) return;
+    try {
+      await vscode.workspace.fs.writeFile(target, new Uint8Array(bytes));
+      const choice = await vscode.window.showInformationMessage(
+        `BT Viewer: exported PDF to ${path.basename(target.fsPath)}`,
+        "Reveal"
+      );
+      if (choice === "Reveal") {
+        await vscode.commands.executeCommand("revealFileInOS", target);
+      }
+    } catch (err: any) {
+      vscode.window.showErrorMessage(`BT Viewer: failed to save PDF: ${err?.message || err}`);
+    }
   }
 
   private dispose() {
