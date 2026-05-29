@@ -2328,7 +2328,19 @@ function parseBTXml(xmlContent, options) {
 }
 
 // src/btMonitor.ts
-var zmq = __toESM(require("zeromq"));
+var zmqCache;
+function loadZmq() {
+  if (zmqCache !== void 0) return zmqCache;
+  try {
+    zmqCache = require("zeromq");
+  } catch {
+    zmqCache = null;
+  }
+  return zmqCache;
+}
+function isMonitorAvailable() {
+  return loadZmq() !== null;
+}
 var STATUS_NAMES = {
   0: "IDLE",
   1: "RUNNING",
@@ -2377,6 +2389,11 @@ var BTMonitor = class {
   }
   async start(host = "localhost", port = 1666) {
     if (this.running) this.stop();
+    const zmq = loadZmq();
+    if (!zmq) {
+      this.onError("Live monitoring unavailable: zeromq native binary not loaded for this platform");
+      return;
+    }
     this.running = true;
     const reqAddr = `tcp://${host}:${port}`;
     this.onInfo(`Connecting to ${reqAddr}...`);
@@ -2540,6 +2557,11 @@ var BTViewerPanel = class _BTViewerPanel {
     this.currentDocument = document;
     this.panel.webview.html = this.getWebviewContent();
     this.sendTreeData();
+    this.panel.webview.postMessage({
+      command: "monitorAvailability",
+      available: isMonitorAvailable(),
+      reason: isMonitorAvailable() ? "" : "Live monitoring needs the native zeromq binary, which isn't available on this platform. The static tree viewer still works."
+    });
     this.panel.webview.onDidReceiveMessage(
       (message) => {
         switch (message.command) {
@@ -2566,6 +2588,13 @@ var BTViewerPanel = class _BTViewerPanel {
             }
             break;
           case "startMonitor": {
+            if (!isMonitorAvailable()) {
+              this.panel.webview.postMessage({
+                command: "monitorError",
+                message: "Live monitoring unavailable: zeromq native binary not loaded for this platform"
+              });
+              break;
+            }
             const config = vscode.workspace.getConfiguration("behaviortreeViewer");
             const host = config.get("monitorHost", "localhost");
             const port = config.get("monitorPort", 1666);

@@ -124,6 +124,17 @@ body {
   border-color: var(--bt-accent);
 }
 
+.toolbar-btn.disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  pointer-events: auto;
+}
+
+.toolbar-btn.disabled:hover {
+  background: transparent;
+  border-color: var(--bt-border);
+}
+
 .toolbar-select {
   background: var(--bt-surface);
   color: var(--bt-fg);

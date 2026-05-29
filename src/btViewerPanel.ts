@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 import * as path from "path";
 import { parseBTXml } from "./btParser";
 import { BTParsedFile, BTNodeData } from "./types";
-import { BTMonitor } from "./btMonitor";
+import { BTMonitor, isMonitorAvailable } from "./btMonitor";
 
 function debounce<T extends (...args: any[]) => void>(fn: T, ms: number): T {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -61,6 +61,13 @@ export class BTViewerPanel {
 
     this.panel.webview.html = this.getWebviewContent();
     this.sendTreeData();
+    this.panel.webview.postMessage({
+      command: "monitorAvailability",
+      available: isMonitorAvailable(),
+      reason: isMonitorAvailable()
+        ? ""
+        : "Live monitoring needs the native zeromq binary, which isn't available on this platform. The static tree viewer still works.",
+    });
 
     // Handle messages from webview
     this.panel.webview.onDidReceiveMessage(
@@ -101,6 +108,13 @@ export class BTViewerPanel {
             }
             break;
           case "startMonitor": {
+            if (!isMonitorAvailable()) {
+              this.panel.webview.postMessage({
+                command: "monitorError",
+                message: "Live monitoring unavailable: zeromq native binary not loaded for this platform",
+              });
+              break;
+            }
             const config = vscode.workspace.getConfiguration("behaviortreeViewer");
             const host = config.get<string>("monitorHost", "localhost");
             const port = config.get<number>("monitorPort", 1666);

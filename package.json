@@ -104,7 +104,9 @@
   "dependencies": {
     "fast-xml-parser": "^4.3.0",
     "jspdf": "^4.2.1",
-    "svg2pdf.js": "^2.7.0",
+    "svg2pdf.js": "^2.7.0"
+  },
+  "optionalDependencies": {
     "zeromq": "^6.5.0"
   }
 }

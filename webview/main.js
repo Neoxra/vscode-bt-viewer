@@ -145,6 +145,7 @@
   let searchQuery = "";
   let activeSidePanel = null; // "blackboard" | "palette" | "detail" | "subtreeView" | null
   let monitorActive = false;
+  let monitorAvailable = true;
   let lastNodeStatuses = {}; // uid -> status string
 
   // ------ NODE DESCRIPTIONS ------
@@ -1897,6 +1898,7 @@
   }
 
   btnMonitor.addEventListener("click", () => {
+    if (!monitorAvailable) return;
     if (monitorActive) {
       vscode.postMessage({ command: "stopMonitor" });
       monitorActive = false;
@@ -2143,6 +2145,19 @@
         monitorStatusEl.textContent = "";
         clearMonitorOverlay();
         updateFollowButtonState();
+        break;
+
+      case "monitorAvailability":
+        monitorAvailable = !!msg.available;
+        if (monitorAvailable) {
+          btnMonitor.classList.remove("disabled");
+          btnMonitor.removeAttribute("aria-disabled");
+          btnMonitor.title = "Live monitor via ZMQ (port 1666)";
+        } else {
+          btnMonitor.classList.add("disabled");
+          btnMonitor.setAttribute("aria-disabled", "true");
+          btnMonitor.title = msg.reason || "Live monitoring unavailable on this platform";
+        }
         break;
 
       case "themeChanged":

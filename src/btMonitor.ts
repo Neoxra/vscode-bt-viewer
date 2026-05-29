@@ -1,4 +1,30 @@
-import * as zmq from "zeromq";
+type ZmqRequestSocket = {
+  receiveTimeout: number;
+  sendTimeout: number;
+  linger: number;
+  connect(addr: string): void;
+  close(): void;
+  send(buf: Buffer): Promise<void>;
+  receive(): Promise<Buffer[]>;
+};
+
+type ZmqModule = { Request: new () => ZmqRequestSocket };
+
+let zmqCache: ZmqModule | null | undefined;
+
+function loadZmq(): ZmqModule | null {
+  if (zmqCache !== undefined) return zmqCache;
+  try {
+    zmqCache = require("zeromq") as ZmqModule;
+  } catch {
+    zmqCache = null;
+  }
+  return zmqCache;
+}
+
+export function isMonitorAvailable(): boolean {
+  return loadZmq() !== null;
+}
 
 export interface MonitorStatus {
   nodes: Record<string, string>;
@@ -60,12 +86,17 @@ export class BTMonitor {
   async start(host: string = "localhost", port: number = 1666): Promise<void> {
     if (this.running) this.stop();
 
+    const zmq = loadZmq();
+    if (!zmq) {
+      this.onError("Live monitoring unavailable: zeromq native binary not loaded for this platform");
+      return;
+    }
+
     this.running = true;
     const reqAddr = `tcp://${host}:${port}`;
     this.onInfo(`Connecting to ${reqAddr}...`);
 
-    // Create a persistent REQ socket
-    let sock: zmq.Request | null = null;
+    let sock: ZmqRequestSocket | null = null;
     let treeFetched = false;
     let polling = false;
     let sockBusy = false;
