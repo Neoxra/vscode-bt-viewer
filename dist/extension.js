@@ -2208,6 +2208,29 @@ function getCommentRanges(xml) {
   }
   return ranges;
 }
+function extractRootElement(xml, commentRanges) {
+  const inComment = (idx) => commentRanges.some(([lo, hi]) => idx >= lo && idx < hi);
+  const openRe = /<root(?=[\s>])/g;
+  let openMatch;
+  let start = -1;
+  while (openMatch = openRe.exec(xml)) {
+    if (inComment(openMatch.index)) continue;
+    start = openMatch.index;
+    break;
+  }
+  if (start === -1) return xml;
+  const tagEnd = xml.indexOf(">", start);
+  if (tagEnd === -1) return xml;
+  if (xml[tagEnd - 1] === "/") return xml.slice(start, tagEnd + 1);
+  const closeRe = /<\/root>/g;
+  closeRe.lastIndex = tagEnd + 1;
+  let closeMatch;
+  while (closeMatch = closeRe.exec(xml)) {
+    if (inComment(closeMatch.index)) continue;
+    return xml.slice(start, closeMatch.index + closeMatch[0].length);
+  }
+  return xml.slice(start);
+}
 function parseNodeElement(el, tagName, nodeModels, portModels, cursor) {
   const xmlLine = cursor.consume(tagName);
   const attrs = getAttrs(el);
@@ -2308,7 +2331,7 @@ function parseBTXml(xmlContent, options) {
     preserveOrder: true,
     trimValues: true
   });
-  const parsed = parser.parse(xmlContent);
+  const parsed = parser.parse(extractRootElement(xmlContent, commentRanges));
   const rootEl = parsed.find((el) => getTagName(el) === "root");
   if (!rootEl) {
     throw new Error("Invalid BT XML: no <root> element found");

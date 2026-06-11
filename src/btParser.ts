@@ -171,6 +171,35 @@ function getCommentRanges(xml: string): Array<[number, number]> {
   return ranges;
 }
 
+function extractRootElement(xml: string, commentRanges: Array<[number, number]>): string {
+  const inComment = (idx: number): boolean => commentRanges.some(([lo, hi]) => idx >= lo && idx < hi);
+
+  const openRe = /<root(?=[\s>])/g;
+  let openMatch: RegExpExecArray | null;
+  let start = -1;
+  while ((openMatch = openRe.exec(xml))) {
+    if (inComment(openMatch.index)) continue;
+    start = openMatch.index;
+    break;
+  }
+
+  if (start === -1) return xml;
+
+  const tagEnd = xml.indexOf(">", start);
+  if (tagEnd === -1) return xml;
+  if(xml[tagEnd - 1] === "/") return xml.slice(start, tagEnd + 1); // self-closing root
+
+  const closeRe = /<\/root>/g;
+  closeRe.lastIndex = tagEnd + 1;
+  let closeMatch: RegExpExecArray | null;
+  while ((closeMatch = closeRe.exec(xml))) {
+    if (inComment(closeMatch.index)) continue;
+    return xml.slice(start, closeMatch.index + closeMatch[0].length);
+  }
+
+  return xml.slice(start); // no closing tag, return from <root> to end
+};
+
 function parseNodeElement(
   el: any,
   tagName: string,
@@ -306,7 +335,7 @@ export function parseBTXml(
     trimValues: true,
   });
 
-  const parsed = parser.parse(xmlContent);
+  const parsed = parser.parse(extractRootElement(xmlContent, commentRanges));
 
   // With preserveOrder: true, parsed is an array of top-level elements
   // Find the <root> element
