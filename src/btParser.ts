@@ -32,7 +32,7 @@ interface TagCursor {
   consume(tagName: string): number | undefined;
 }
 
-function buildTagCursor(xml: string): TagCursor {
+function buildTagCursor(xml: string, commentRanges: Array<[number, number]>): TagCursor {
   // Build line-start offsets for O(log n) line lookup.
   const lineStarts: number[] = [0];
   for (let i = 0; i < xml.length; i++) {
@@ -63,6 +63,7 @@ function buildTagCursor(xml: string): TagCursor {
       skipRanges.push([openMatch.index, closeIdx + closeStr.length]);
     }
   }
+  skipRanges.push(...commentRanges);
   const inSkip = (idx: number): boolean => {
     for (const [lo, hi] of skipRanges) {
       if (idx >= lo && idx < hi) return true;
@@ -158,6 +159,16 @@ function getAttrs(el: any): Record<string, string> {
 
 function getChildren(el: any, tagName: string): any[] {
   return Array.isArray(el[tagName]) ? el[tagName] : [];
+}
+
+function getCommentRanges(xml: string): Array<[number, number]> {
+  const ranges: Array<[number, number]> = [];
+  const commentRe = /<!--[\s\S]*?-->/g;
+  let m: RegExpExecArray | null;
+  while ((m = commentRe.exec(xml))) {
+    ranges.push([m.index, m.index + m[0].length]);
+  }
+  return ranges;
 }
 
 function parseNodeElement(
@@ -284,7 +295,8 @@ export function parseBTXml(
   if (options?.resetIds !== false) {
     nodeIdCounter = 0;
   }
-  const cursor = buildTagCursor(xmlContent);
+  const commentRanges = getCommentRanges(xmlContent);
+  const cursor = buildTagCursor(xmlContent, commentRanges);
 
   const parser = new XMLParser({
     ignoreAttributes: false,

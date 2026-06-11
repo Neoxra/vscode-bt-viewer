@@ -2093,7 +2093,7 @@ var nodeIdCounter = 0;
 function nextId() {
   return `node_${nodeIdCounter++}`;
 }
-function buildTagCursor(xml) {
+function buildTagCursor(xml, commentRanges) {
   const lineStarts = [0];
   for (let i2 = 0; i2 < xml.length; i2++) {
     if (xml.charCodeAt(i2) === 10) lineStarts.push(i2 + 1);
@@ -2118,6 +2118,7 @@ function buildTagCursor(xml) {
       skipRanges.push([openMatch.index, closeIdx + closeStr.length]);
     }
   }
+  skipRanges.push(...commentRanges);
   const inSkip = (idx) => {
     for (const [lo, hi] of skipRanges) {
       if (idx >= lo && idx < hi) return true;
@@ -2197,6 +2198,15 @@ function getAttrs(el) {
 }
 function getChildren(el, tagName) {
   return Array.isArray(el[tagName]) ? el[tagName] : [];
+}
+function getCommentRanges(xml) {
+  const ranges = [];
+  const commentRe = /<!--[\s\S]*?-->/g;
+  let m;
+  while (m = commentRe.exec(xml)) {
+    ranges.push([m.index, m.index + m[0].length]);
+  }
+  return ranges;
 }
 function parseNodeElement(el, tagName, nodeModels, portModels, cursor) {
   const xmlLine = cursor.consume(tagName);
@@ -2289,7 +2299,8 @@ function parseBTXml(xmlContent, options) {
   if (options?.resetIds !== false) {
     nodeIdCounter = 0;
   }
-  const cursor = buildTagCursor(xmlContent);
+  const commentRanges = getCommentRanges(xmlContent);
+  const cursor = buildTagCursor(xmlContent, commentRanges);
   const parser = new import_fast_xml_parser.XMLParser({
     ignoreAttributes: false,
     attributeNamePrefix: "@_",
