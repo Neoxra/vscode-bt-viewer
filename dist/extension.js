@@ -2093,7 +2093,7 @@ var nodeIdCounter = 0;
 function nextId() {
   return `node_${nodeIdCounter++}`;
 }
-function buildTagCursor(xml) {
+function buildTagCursor(xml, commentRanges) {
   const lineStarts = [0];
   for (let i2 = 0; i2 < xml.length; i2++) {
     if (xml.charCodeAt(i2) === 10) lineStarts.push(i2 + 1);
@@ -2118,6 +2118,7 @@ function buildTagCursor(xml) {
       skipRanges.push([openMatch.index, closeIdx + closeStr.length]);
     }
   }
+  skipRanges.push(...commentRanges);
   const inSkip = (idx) => {
     for (const [lo, hi] of skipRanges) {
       if (idx >= lo && idx < hi) return true;
@@ -2197,6 +2198,38 @@ function getAttrs(el) {
 }
 function getChildren(el, tagName) {
   return Array.isArray(el[tagName]) ? el[tagName] : [];
+}
+function getCommentRanges(xml) {
+  const ranges = [];
+  const commentRe = /<!--[\s\S]*?-->/g;
+  let m;
+  while (m = commentRe.exec(xml)) {
+    ranges.push([m.index, m.index + m[0].length]);
+  }
+  return ranges;
+}
+function extractRootElement(xml, commentRanges) {
+  const inComment = (idx) => commentRanges.some(([lo, hi]) => idx >= lo && idx < hi);
+  const openRe = /<root(?=[\s>])/g;
+  let openMatch;
+  let start = -1;
+  while (openMatch = openRe.exec(xml)) {
+    if (inComment(openMatch.index)) continue;
+    start = openMatch.index;
+    break;
+  }
+  if (start === -1) return xml;
+  const tagEnd = xml.indexOf(">", start);
+  if (tagEnd === -1) return xml;
+  if (xml[tagEnd - 1] === "/") return xml.slice(start, tagEnd + 1);
+  const closeRe = /<\/root>/g;
+  closeRe.lastIndex = tagEnd + 1;
+  let closeMatch;
+  while (closeMatch = closeRe.exec(xml)) {
+    if (inComment(closeMatch.index)) continue;
+    return xml.slice(start, closeMatch.index + closeMatch[0].length);
+  }
+  return xml.slice(start);
 }
 function parseNodeElement(el, tagName, nodeModels, portModels, cursor) {
   const xmlLine = cursor.consume(tagName);
@@ -2289,7 +2322,8 @@ function parseBTXml(xmlContent, options) {
   if (options?.resetIds !== false) {
     nodeIdCounter = 0;
   }
-  const cursor = buildTagCursor(xmlContent);
+  const commentRanges = getCommentRanges(xmlContent);
+  const cursor = buildTagCursor(xmlContent, commentRanges);
   const parser = new import_fast_xml_parser.XMLParser({
     ignoreAttributes: false,
     attributeNamePrefix: "@_",
@@ -2297,7 +2331,7 @@ function parseBTXml(xmlContent, options) {
     preserveOrder: true,
     trimValues: true
   });
-  const parsed = parser.parse(xmlContent);
+  const parsed = parser.parse(extractRootElement(xmlContent, commentRanges));
   const rootEl = parsed.find((el) => getTagName(el) === "root");
   if (!rootEl) {
     throw new Error("Invalid BT XML: no <root> element found");
