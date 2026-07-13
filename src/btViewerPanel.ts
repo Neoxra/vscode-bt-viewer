@@ -3,6 +3,7 @@ import * as path from "path";
 import { parseBTXml } from "./btParser";
 import { BTParsedFile, BTNodeData } from "./types";
 import { BTMonitor, isMonitorAvailable } from "./btMonitor";
+import { BtLogReplay } from "./btLogReader";
 
 function debounce<T extends (...args: any[]) => void>(fn: T, ms: number): T {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -20,6 +21,9 @@ export class BTViewerPanel {
   private readonly extensionUri: vscode.Uri;
   private disposables: vscode.Disposable[] = [];
   private currentDocument: vscode.TextDocument | undefined;
+  // Set when the panel is showing a .btlog replay rather than a live file. Used
+  // only for the panel title; playback itself lives entirely in the webview.
+  private replayUri: vscode.Uri | undefined;
   private monitor: BTMonitor | null = null;
   // Caches for cross-file SubTree resolution. xmlIndex is a path -> tree IDs
   // map (built via regex over all .xml in the workspace); parsedFiles caches
@@ -54,7 +58,40 @@ export class BTViewerPanel {
     BTViewerPanel.currentPanel = new BTViewerPanel(panel, extensionUri, document);
   }
 
-  private constructor(panel: vscode.WebviewPanel, extensionUri: vscode.Uri, document: vscode.TextDocument) {
+  /**
+   * Open (or reuse) the viewer to replay a decoded `.btlog` recording. Unlike
+   * createOrShow there is no backing TextDocument: the tree XML and transitions
+   * come from the recording, and playback runs in the webview.
+   */
+  public static createOrShowReplay(extensionUri: vscode.Uri, uri: vscode.Uri, replay: BtLogReplay) {
+    const column = vscode.ViewColumn.Active;
+
+    if (BTViewerPanel.currentPanel) {
+      BTViewerPanel.currentPanel.panel.reveal(column);
+      BTViewerPanel.currentPanel.showReplay(uri, replay);
+      return;
+    }
+
+    const panel = vscode.window.createWebviewPanel(
+      BTViewerPanel.viewType,
+      "BT Replay",
+      column,
+      {
+        enableScripts: true,
+        retainContextWhenHidden: true,
+        localResourceRoots: [
+          vscode.Uri.joinPath(extensionUri, "webview"),
+          vscode.Uri.joinPath(extensionUri, "webview", "vendor"),
+        ],
+      }
+    );
+
+    const instance = new BTViewerPanel(panel, extensionUri, undefined);
+    BTViewerPanel.currentPanel = instance;
+    instance.showReplay(uri, replay);
+  }
+
+  private constructor(panel: vscode.WebviewPanel, extensionUri: vscode.Uri, document: vscode.TextDocument | undefined) {
     this.panel = panel;
     this.extensionUri = extensionUri;
     this.currentDocument = document;
@@ -173,7 +210,39 @@ export class BTViewerPanel {
 
   public update(document: vscode.TextDocument) {
     this.currentDocument = document;
+    this.replayUri = undefined;
+    this.panel.title = "BT Viewer";
     this.sendTreeData();
+  }
+
+  /**
+   * Load a decoded recording into the webview. Replay and the live monitor are
+   * mutually exclusive, so any active monitor is stopped first. Parsing reuses
+   * the normal XML parser: the embedded XML carries `_uid` on every node, which
+   * is exactly what the webview matches transition uids against.
+   */
+  private showReplay(uri: vscode.Uri, replay: BtLogReplay) {
+    this.stopMonitor();
+    this.currentDocument = undefined;
+    this.replayUri = uri;
+    this.panel.title = `Replay: ${path.basename(uri.fsPath)}`;
+
+    try {
+      const parsed = parseBTXml(replay.xml);
+      this.panel.webview.postMessage({
+        command: "loadReplay",
+        data: parsed,
+        fileName: path.basename(uri.fsPath),
+        transitions: replay.transitions,
+        duration: replay.duration,
+        recordedAtMs: replay.recordedAtMs,
+      });
+    } catch (e: any) {
+      this.panel.webview.postMessage({
+        command: "error",
+        message: `Failed to parse tree from recording: ${e?.message || e}`,
+      });
+    }
   }
 
   private startMonitor(host: string, port: number) {
@@ -393,9 +462,9 @@ export class BTViewerPanel {
     </div>
     <button id="btn-monitor" class="toolbar-btn" title="Live monitor via ZMQ (port 1666)">Monitor</button>
     <button id="btn-follow" class="toolbar-btn" title="Auto-zoom to running nodes">Follow</button>
-    <button id="btn-layout-toggle" class="toolbar-btn" title="Toggle horizontal/waterfall layout">Layout</button>
-    <button id="btn-expand-all" class="toolbar-btn" title="Expand all nodes">All</button>
-    <button id="btn-collapse-all" class="toolbar-btn" title="Collapse to depth">Min</button>
+    <button id="btn-layout-toggle" class="toolbar-btn" title="Cycle view layout: Auto / Horizontal / Waterfall">View: Auto</button>
+    <button id="btn-expand-all" class="toolbar-btn" title="Expand everything, including SubTrees">Expand All</button>
+    <button id="btn-collapse-all" class="toolbar-btn" title="Reset to the Depth view (discard manual expand/collapse)">Reset</button>
     <label class="toolbar-hint" title="Auto-collapse depth for large trees">Depth <input id="depth-input" type="number" min="1" max="20" value="3" class="toolbar-input depth-input" /></label>
     <span id="monitor-status" class="toolbar-hint"></span>
     <button id="btn-blackboard" class="toolbar-btn" title="Toggle Blackboard panel">BB</button>

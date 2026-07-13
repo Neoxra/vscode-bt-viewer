@@ -1,10 +1,32 @@
 import * as vscode from "vscode";
 import { BTViewerPanel } from "./btViewerPanel";
+import { readBtLog } from "./btLogReader";
+
+/**
+ * Decode a `.btlog` recording and open (or reuse) the viewer in replay mode.
+ * `.btlog` is binary, so we read raw bytes rather than opening a TextDocument.
+ */
+async function openReplay(extensionUri: vscode.Uri, uri: vscode.Uri) {
+  try {
+    const bytes = await vscode.workspace.fs.readFile(uri);
+    const replay = readBtLog(bytes);
+    BTViewerPanel.createOrShowReplay(extensionUri, uri, replay);
+  } catch (e: any) {
+    vscode.window.showErrorMessage(`BT Viewer: could not replay recording: ${e?.message || e}`);
+  }
+}
 
 export function activate(context: vscode.ExtensionContext) {
   const openViewerCommand = vscode.commands.registerCommand(
     "behaviortree.openViewer",
     async (uri?: vscode.Uri) => {
+      // A .btlog recording is binary: route it to the replay path instead of
+      // trying to open it as a text document.
+      if (uri && uri.fsPath.endsWith(".btlog")) {
+        await openReplay(context.extensionUri, uri);
+        return;
+      }
+
       // If invoked from explorer context menu, uri is the file
       // If invoked from editor context menu or command palette, try active editor
       let document: vscode.TextDocument | undefined;
@@ -46,7 +68,21 @@ export function activate(context: vscode.ExtensionContext) {
     }
   );
 
-  context.subscriptions.push(openViewerCommand);
+  const replayCommand = vscode.commands.registerCommand(
+    "behaviortree.replayRecording",
+    async (uri?: vscode.Uri) => {
+      const target = uri ?? vscode.window.activeTextEditor?.document.uri;
+      if (!target) {
+        vscode.window.showErrorMessage(
+          "No .btlog recording selected. Right-click a .btlog file in the explorer to replay it."
+        );
+        return;
+      }
+      await openReplay(context.extensionUri, target);
+    }
+  );
+
+  context.subscriptions.push(openViewerCommand, replayCommand);
 }
 
 export function deactivate() {}

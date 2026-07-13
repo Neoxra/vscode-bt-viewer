@@ -176,6 +176,47 @@ body {
   box-shadow: 0 0 0 1px var(--bt-accent);
 }
 
+/* ---- REPLAY TRANSPORT BAR ---- */
+
+#replay-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px;
+  background: var(--bt-surface);
+  border-bottom: 1px solid var(--bt-border);
+  flex-shrink: 0;
+  z-index: 9;
+}
+
+#replay-bar.hidden { display: none; }
+
+#replay-bar .replay-label {
+  font-weight: 600;
+  color: var(--status-running);
+  margin-left: 0;
+}
+
+#replay-play {
+  min-width: 30px;
+  text-align: center;
+}
+
+#replay-time {
+  min-width: 96px;
+  text-align: center;
+  margin-left: 0;
+}
+
+#replay-scrubber {
+  flex: 1;
+  min-width: 120px;
+  height: 4px;
+  cursor: pointer;
+  accent-color: var(--bt-accent);
+  background: transparent;
+}
+
 /* ---- MAIN AREA ---- */
 
 #main-area {
@@ -420,6 +461,12 @@ body.ctrl-held .bt-node:hover rect {
 
 .bt-node.status-idle rect {
   opacity: 0.4;
+}
+
+.bt-node.status-skipped rect {
+  stroke: var(--bt-muted) !important;
+  stroke-dasharray: 3 3;
+  opacity: 0.5;
 }
 
 /* Fade overlay when BT goes idle or finishes */

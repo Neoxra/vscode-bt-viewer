@@ -2556,6 +2556,9 @@ var BTViewerPanel = class _BTViewerPanel {
   extensionUri;
   disposables = [];
   currentDocument;
+  // Set when the panel is showing a .btlog replay rather than a live file. Used
+  // only for the panel title; playback itself lives entirely in the webview.
+  replayUri;
   monitor = null;
   // Caches for cross-file SubTree resolution. xmlIndex is a path -> tree IDs
   // map (built via regex over all .xml in the workspace); parsedFiles caches
@@ -2584,6 +2587,35 @@ var BTViewerPanel = class _BTViewerPanel {
       }
     );
     _BTViewerPanel.currentPanel = new _BTViewerPanel(panel, extensionUri, document);
+  }
+  /**
+   * Open (or reuse) the viewer to replay a decoded `.btlog` recording. Unlike
+   * createOrShow there is no backing TextDocument: the tree XML and transitions
+   * come from the recording, and playback runs in the webview.
+   */
+  static createOrShowReplay(extensionUri, uri, replay) {
+    const column = vscode.ViewColumn.Active;
+    if (_BTViewerPanel.currentPanel) {
+      _BTViewerPanel.currentPanel.panel.reveal(column);
+      _BTViewerPanel.currentPanel.showReplay(uri, replay);
+      return;
+    }
+    const panel = vscode.window.createWebviewPanel(
+      _BTViewerPanel.viewType,
+      "BT Replay",
+      column,
+      {
+        enableScripts: true,
+        retainContextWhenHidden: true,
+        localResourceRoots: [
+          vscode.Uri.joinPath(extensionUri, "webview"),
+          vscode.Uri.joinPath(extensionUri, "webview", "vendor")
+        ]
+      }
+    );
+    const instance = new _BTViewerPanel(panel, extensionUri, void 0);
+    _BTViewerPanel.currentPanel = instance;
+    instance.showReplay(uri, replay);
   }
   constructor(panel, extensionUri, document) {
     this.panel = panel;
@@ -2680,7 +2712,37 @@ var BTViewerPanel = class _BTViewerPanel {
   }
   update(document) {
     this.currentDocument = document;
+    this.replayUri = void 0;
+    this.panel.title = "BT Viewer";
     this.sendTreeData();
+  }
+  /**
+   * Load a decoded recording into the webview. Replay and the live monitor are
+   * mutually exclusive, so any active monitor is stopped first. Parsing reuses
+   * the normal XML parser: the embedded XML carries `_uid` on every node, which
+   * is exactly what the webview matches transition uids against.
+   */
+  showReplay(uri, replay) {
+    this.stopMonitor();
+    this.currentDocument = void 0;
+    this.replayUri = uri;
+    this.panel.title = `Replay: ${path.basename(uri.fsPath)}`;
+    try {
+      const parsed = parseBTXml(replay.xml);
+      this.panel.webview.postMessage({
+        command: "loadReplay",
+        data: parsed,
+        fileName: path.basename(uri.fsPath),
+        transitions: replay.transitions,
+        duration: replay.duration,
+        recordedAtMs: replay.recordedAtMs
+      });
+    } catch (e) {
+      this.panel.webview.postMessage({
+        command: "error",
+        message: `Failed to parse tree from recording: ${e?.message || e}`
+      });
+    }
   }
   startMonitor(host, port) {
     if (this.monitor?.isRunning) {
@@ -2880,9 +2942,9 @@ var BTViewerPanel = class _BTViewerPanel {
     </div>
     <button id="btn-monitor" class="toolbar-btn" title="Live monitor via ZMQ (port 1666)">Monitor</button>
     <button id="btn-follow" class="toolbar-btn" title="Auto-zoom to running nodes">Follow</button>
-    <button id="btn-layout-toggle" class="toolbar-btn" title="Toggle horizontal/waterfall layout">Layout</button>
-    <button id="btn-expand-all" class="toolbar-btn" title="Expand all nodes">All</button>
-    <button id="btn-collapse-all" class="toolbar-btn" title="Collapse to depth">Min</button>
+    <button id="btn-layout-toggle" class="toolbar-btn" title="Cycle view layout: Auto / Horizontal / Waterfall">View: Auto</button>
+    <button id="btn-expand-all" class="toolbar-btn" title="Expand everything, including SubTrees">Expand All</button>
+    <button id="btn-collapse-all" class="toolbar-btn" title="Reset to the Depth view (discard manual expand/collapse)">Reset</button>
     <label class="toolbar-hint" title="Auto-collapse depth for large trees">Depth <input id="depth-input" type="number" min="1" max="20" value="3" class="toolbar-input depth-input" /></label>
     <span id="monitor-status" class="toolbar-hint"></span>
     <button id="btn-blackboard" class="toolbar-btn" title="Toggle Blackboard panel">BB</button>
@@ -2974,11 +3036,71 @@ function getNonce() {
   return text;
 }
 
+// src/btLogReader.ts
+var NodeStatus = /* @__PURE__ */ ((NodeStatus2) => {
+  NodeStatus2[NodeStatus2["Idle"] = 0] = "Idle";
+  NodeStatus2[NodeStatus2["Running"] = 1] = "Running";
+  NodeStatus2[NodeStatus2["Success"] = 2] = "Success";
+  NodeStatus2[NodeStatus2["Failure"] = 3] = "Failure";
+  NodeStatus2[NodeStatus2["Skipped"] = 4] = "Skipped";
+  return NodeStatus2;
+})(NodeStatus || {});
+function readBtLog(bytes) {
+  const magic = "BTCPP4-FileLogger2";
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let offset = 0;
+  if (new TextDecoder("latin1").decode(bytes.subarray(0, magic.length)) !== magic) {
+    throw new Error(`Not a .btlog file: missing "${magic}" header`);
+  }
+  offset += magic.length;
+  const version = view.getUint8(offset);
+  offset += 1;
+  if (version !== 1) {
+    throw new Error(`Unsupported .btlog version ${version} (this reader handles version 1)`);
+  }
+  const xmlSize = view.getUint32(offset, true);
+  offset += 4;
+  if (offset + xmlSize + 8 > bytes.byteLength) {
+    throw new Error("Corrupt .btlog: header/XML overruns the file");
+  }
+  const xml = new TextDecoder().decode(bytes.subarray(offset, offset + xmlSize));
+  offset += xmlSize;
+  const firstMicros = view.getBigUint64(offset, true);
+  offset += 8;
+  const transitions = [];
+  while (offset + 9 <= bytes.byteLength) {
+    const micros = view.getUint32(offset, true) + view.getUint16(offset + 4, true) * 2 ** 32;
+    const uid = view.getUint16(offset + 6, true);
+    const status = (NodeStatus[view.getUint8(offset + 8)] ?? "unknown").toUpperCase();
+    transitions.push({ t: micros / 1e6, uid, status });
+    offset += 9;
+  }
+  return {
+    xml,
+    transitions,
+    duration: transitions.at(-1)?.t ?? 0,
+    recordedAtMs: Number(firstMicros / 1000n)
+  };
+}
+
 // src/extension.ts
+async function openReplay(extensionUri, uri) {
+  try {
+    const bytes = await vscode2.workspace.fs.readFile(uri);
+    const replay = readBtLog(bytes);
+    BTViewerPanel.createOrShowReplay(extensionUri, uri, replay);
+  } catch (e) {
+    vscode2.window.showErrorMessage(`BT Viewer: could not replay recording: ${e?.message || e}`);
+  }
+}
 function activate(context) {
   const openViewerCommand = vscode2.commands.registerCommand(
     "behaviortree.openViewer",
     async (uri) => {
+      if (uri && uri.fsPath.endsWith(".btlog")) {
+        await openReplay(context.extensionUri, uri);
+        return;
+      }
       let document;
       if (uri) {
         document = await vscode2.workspace.openTextDocument(uri);
@@ -3010,7 +3132,20 @@ function activate(context) {
       BTViewerPanel.createOrShow(context.extensionUri, document);
     }
   );
-  context.subscriptions.push(openViewerCommand);
+  const replayCommand = vscode2.commands.registerCommand(
+    "behaviortree.replayRecording",
+    async (uri) => {
+      const target = uri ?? vscode2.window.activeTextEditor?.document.uri;
+      if (!target) {
+        vscode2.window.showErrorMessage(
+          "No .btlog recording selected. Right-click a .btlog file in the explorer to replay it."
+        );
+        return;
+      }
+      await openReplay(context.extensionUri, target);
+    }
+  );
+  context.subscriptions.push(openViewerCommand, replayCommand);
 }
 function deactivate() {
 }

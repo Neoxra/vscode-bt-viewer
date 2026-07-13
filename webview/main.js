@@ -408,30 +408,31 @@
   }
 
   /**
-   * During follow mode: expand the path to running nodes, collapse inactive deep branches.
-   * Returns true if this node or any descendant is running.
+   * During follow mode: additively expand the path to running nodes. Returns
+   * true if this node or any descendant is running. Follow is purely additive:
+   * it never collapses other branches, so the user's own expand/collapse state
+   * is preserved (the camera, not collapsing, keeps the active node in view).
+   * `changed` is an accumulator ({ value }) set to true only when this call
+   * actually mutates collapsedNodes, so the caller can re-render only on a real
+   * structural change rather than on every frame that has a running node.
    */
-  function expandRunningPath(node, statuses, depth) {
+  function expandRunningPath(node, statuses, changed) {
     if (!node.children || node.children.length === 0) {
-      if (node.uid !== undefined && statuses[String(node.uid)] === "RUNNING") return true;
-      return false;
+      return node.uid !== undefined && statuses[String(node.uid)] === "RUNNING";
     }
 
-    let anyRunning = false;
-    if (node.uid !== undefined && statuses[String(node.uid)] === "RUNNING") anyRunning = true;
+    let anyRunning = node.uid !== undefined && statuses[String(node.uid)] === "RUNNING";
 
     for (const child of node.children) {
-      if (expandRunningPath(child, statuses, depth + 1)) {
+      if (expandRunningPath(child, statuses, changed)) {
         anyRunning = true;
       }
     }
 
-    if (anyRunning) {
-      // This node is on the running path: expand it
-      collapsedNodes.delete(node.id);
-    } else if (depth >= 3) {
-      // Not on running path and deep enough: collapse
-      collapsedNodes.add(node.id);
+    // On the running path: expand it. Set.delete reports whether it removed
+    // anything, so we only flag a genuine change.
+    if (anyRunning && collapsedNodes.delete(node.id)) {
+      changed.value = true;
     }
 
     return anyRunning;
@@ -1827,9 +1828,17 @@
     });
   }
 
+  // Replay owns its state privately; the transport bar's visibility is the
+  // single source of truth for "a replay is on screen", so other module code
+  // reads the DOM rather than a shared variable.
+  function replayActive() {
+    const bar = document.getElementById("replay-bar");
+    return !!bar && !bar.classList.contains("hidden");
+  }
+
   function updateFollowButtonState() {
     if (!btnFollow) return;
-    if (monitorActive) {
+    if (monitorActive || replayActive()) {
       btnFollow.classList.remove("hidden");
     } else {
       btnFollow.classList.add("hidden");
@@ -1842,7 +1851,7 @@
   if (btnLayoutToggle) {
     function updateLayoutLabel() {
       const labels = { auto: "Auto", horizontal: "Horizontal", waterfall: "Waterfall" };
-      btnLayoutToggle.textContent = labels[layoutMode];
+      btnLayoutToggle.textContent = "View: " + labels[layoutMode];
     }
     updateLayoutLabel();
     btnLayoutToggle.addEventListener("click", () => {
@@ -1851,48 +1860,83 @@
       else layoutMode = "auto";
       updateLayoutLabel();
       render();
+      reapplyStatusOverlay();
       setTimeout(fitToView, 50);
     });
   }
 
-  // Expand/Collapse all
+  // Resolve the currently-selected tree (falls back to the main/first tree).
+  function getActiveTree() {
+    if (!treeData || !treeData.trees) return null;
+    const treeId = selectedTreeId || treeData.mainTreeId;
+    return treeData.trees.find(t => t.id === treeId) || treeData.trees[0] || null;
+  }
+
+  // Inline every SubTree instance. Nested SubTrees only appear once their parent
+  // is inlined, so iterate: expand what's visible, rebuild, repeat until stable.
+  // buildLayoutTree's visited guard bounds recursion; the counter is a backstop.
+  function expandAllSubtrees(tree) {
+    const maxPasses = 100; // backstop; buildLayoutTree's visited guard bounds real recursion
+    let added = true;
+    let guard = 0;
+    while (added && guard++ < maxPasses) {
+      added = false;
+      const layoutRoot = buildLayoutTree(tree.root, "", new Set([tree.id]), tree.sourceFile);
+      const stack = [layoutRoot];
+      while (stack.length) {
+        const n = stack.pop();
+        if (n.category === "subtree" && !expandedSubtrees.has(n.id)) {
+          const refName = (n.ports.find(p => p.name === "ID") || {}).value || n.name;
+          if (treeData.trees.some(t => t.id === refName)) {
+            expandedSubtrees.add(n.id);
+            added = true;
+          }
+        }
+        for (const c of (n.children || [])) stack.push(c);
+      }
+    }
+  }
+
+  // Expand All: show everything - clear collapses AND inline every SubTree.
   if (btnExpandAll) {
     btnExpandAll.addEventListener("click", () => {
+      const tree = getActiveTree();
+      if (!tree || !tree.root) return;
       collapsedNodes.clear();
+      expandAllSubtrees(tree);
       render();
-      setTimeout(fitToView, 50);
-    });
-  }
-  if (btnCollapseAll) {
-    btnCollapseAll.addEventListener("click", () => {
-      collapsedNodes.clear();
-      if (treeData && treeData.trees) {
-        const treeId = selectedTreeId || treeData.mainTreeId;
-        const tree = treeData.trees.find(t => t.id === treeId) || treeData.trees[0];
-        if (tree && tree.root) {
-          autoCollapseDepth(tree.root, 0, autoCollapseLevel);
-        }
-      }
-      render();
+      reapplyStatusOverlay();
       setTimeout(fitToView, 50);
     });
   }
 
-  // Depth input
+  // Reset: return to the clean Depth-N view, discarding manual expand/collapse
+  // (both node collapses and SubTree inlines).
+  if (btnCollapseAll) {
+    btnCollapseAll.addEventListener("click", () => {
+      const tree = getActiveTree();
+      if (!tree || !tree.root) return;
+      collapsedNodes.clear();
+      expandedSubtrees.clear();
+      autoCollapseDepth(tree.root, 0, autoCollapseLevel);
+      render();
+      reapplyStatusOverlay();
+      setTimeout(fitToView, 50);
+    });
+  }
+
+  // Depth: set the baseline collapse level and apply the clean Depth-N view.
   if (depthInput) {
     depthInput.addEventListener("change", () => {
       autoCollapseLevel = Math.max(1, Math.min(20, parseInt(depthInput.value, 10) || 3));
-      // Re-apply collapse and re-render
-      if (treeData && treeData.trees) {
-        const treeId = selectedTreeId || treeData.mainTreeId;
-        const tree = treeData.trees.find(t => t.id === treeId) || treeData.trees[0];
-        if (tree && tree.root) {
-          collapsedNodes.clear();
-          autoCollapseDepth(tree.root, 0, autoCollapseLevel);
-          render();
-          setTimeout(fitToView, 50);
-        }
-      }
+      const tree = getActiveTree();
+      if (!tree || !tree.root) return;
+      collapsedNodes.clear();
+      expandedSubtrees.clear();
+      autoCollapseDepth(tree.root, 0, autoCollapseLevel);
+      render();
+      reapplyStatusOverlay();
+      setTimeout(fitToView, 50);
     });
     depthInput.addEventListener("keydown", (e) => e.stopPropagation());
   }
@@ -1915,6 +1959,53 @@
   });
 
   let idleFadeTimer = null;
+
+  /**
+   * Paint the {uid -> status} overlay onto the current node elements: status
+   * colour class plus the dashed `subtree-active` border for running SubTree
+   * nodes. Used both on a normal status update and after a follow-mode render()
+   * rebuilds the DOM, so the two paths can never drift apart.
+   */
+  function applyStatusClasses(statuses, runningUids) {
+    for (const node of layoutNodes) {
+      const el = nodeElements.get(node.id);
+      if (!el) continue;
+
+      el.classList.remove("status-idle", "status-running", "status-success", "status-failure", "subtree-active");
+
+      if (node.uid !== undefined) {
+        const status = statuses[String(node.uid)];
+        if (status) {
+          el.classList.add("status-" + status.toLowerCase());
+        }
+      }
+
+      if (node.category === "subtree" && runningUids.size > 0) {
+        const subtreeUid = node.uid;
+        if (subtreeUid !== undefined && statuses[String(subtreeUid)] === "RUNNING") {
+          el.classList.add("subtree-active");
+        }
+      }
+    }
+  }
+
+  /**
+   * Repaint the last-known status overlay onto freshly-rendered nodes. A manual
+   * render() (Expand All / Reset / Depth / View) rebuilds the DOM and strips the
+   * status classes; during a replay or live monitor that would blank the colours
+   * until the next status tick, so re-apply them here. Paints colours only; it
+   * does NOT move the camera, so it won't fight an explicit expand/collapse.
+   */
+  function reapplyStatusOverlay() {
+    // A non-empty lastNodeStatuses means an overlay (replay or live monitor) is
+    // active; that's the only case where a re-render needs the colours restored.
+    if (!lastNodeStatuses || Object.keys(lastNodeStatuses).length === 0) return;
+    const runningUids = new Set();
+    for (const [uid, st] of Object.entries(lastNodeStatuses)) {
+      if (st === "RUNNING") runningUids.add(uid);
+    }
+    applyStatusClasses(lastNodeStatuses, runningUids);
+  }
 
   function applyMonitorStatus(statuses) {
     lastNodeStatuses = statuses;
@@ -1952,26 +2043,7 @@
       if (svgEl) svgEl.classList.remove("monitor-faded");
     }
 
-    for (const node of layoutNodes) {
-      const el = nodeElements.get(node.id);
-      if (!el) continue;
-
-      el.classList.remove("status-idle", "status-running", "status-success", "status-failure", "subtree-active");
-
-      if (node.uid !== undefined) {
-        const status = statuses[String(node.uid)];
-        if (status) {
-          el.classList.add("status-" + status.toLowerCase());
-        }
-      }
-
-      if (node.category === "subtree" && runningUids.size > 0) {
-        const subtreeUid = node.uid;
-        if (subtreeUid !== undefined && statuses[String(subtreeUid)] === "RUNNING") {
-          el.classList.add("subtree-active");
-        }
-      }
-    }
+    applyStatusClasses(statuses, runningUids);
 
     drawMinimap();
 
@@ -1981,8 +2053,9 @@
         const treeId = selectedTreeId || treeData.mainTreeId;
         const tree = treeData.trees.find(t => t.id === treeId) || treeData.trees[0];
         if (tree && tree.root) {
-          const changed = expandRunningPath(tree.root, statuses, 0);
-          if (changed) {
+          const changed = { value: false };
+          expandRunningPath(tree.root, statuses, changed);
+          if (changed.value) {
             const savedPanX = panX;
             const savedPanY = panY;
             const savedZoom = zoom;
@@ -1990,14 +2063,10 @@
             panX = savedPanX;
             panY = savedPanY;
             zoom = savedZoom;
-            // Re-apply statuses after re-render
-            for (const node of layoutNodes) {
-              const el = nodeElements.get(node.id);
-              if (!el || node.uid === undefined) continue;
-              el.classList.remove("status-idle", "status-running", "status-success", "status-failure", "subtree-active");
-              const st = statuses[String(node.uid)];
-              if (st) el.classList.add("status-" + st.toLowerCase());
-            }
+            // render() rebuilt the DOM and stripped every status class, so
+            // re-apply the full overlay (status + subtree-active), not just
+            // the status colours.
+            applyStatusClasses(statuses, runningUids);
           }
         }
       }
@@ -2054,6 +2123,254 @@
     drawMinimap();
   }
 
+  // ------ REPLAY (.btlog playback) ------
+
+  // A .btlog replay drives the same applyMonitorStatus() path as the live
+  // monitor, but the clock lives here: transitions are folded up to the
+  // playhead into a {uid -> status} snapshot on every frame/seek. All replay
+  // state is private to this function and it wires its own listeners; module
+  // code only ever asks replayActive(), which reads the DOM.
+  function setUpReplayPlayback() {
+    const replay = {
+      mode: false,
+      transitions: [],    // [{ t: seconds, uid, status }], time-sorted
+      duration: 0,        // seconds
+      snapshot: {},       // uid(string) -> status, folded up to snapshotTime
+      cursor: 0,          // next transitions index to fold into the snapshot
+      snapshotTime: 0,    // time the snapshot currently reflects
+      playheadTime: 0,
+      playing: false,
+      speed: 1,           // playback multiplier; 1 = real time
+      frameRequest: null, // requestAnimationFrame handle while playing
+      previousFrame: 0,   // performance.now() of the previous animation frame
+      bar: null,          // transport bar element, built lazily
+      playButton: null,
+      scrubber: null,
+      timeLabel: null,
+    };
+
+    function formatTime(seconds) {
+      return `${(seconds > 0 ? seconds : 0).toFixed(2)}s`;
+    }
+
+    // Build the transport bar once and cache the control refs. Created via the
+    // DOM API (no inline HTML) so it stays within the webview's strict CSP.
+    function buildTransportBar() {
+      if (replay.bar) return;
+      const bar = document.createElement("div");
+      bar.id = "replay-bar";
+      bar.className = "hidden";
+
+      const label = document.createElement("span");
+      label.className = "toolbar-hint replay-label";
+      label.textContent = "Replay";
+
+      replay.playButton = document.createElement("button");
+      replay.playButton.id = "replay-play";
+      replay.playButton.className = "toolbar-btn";
+      replay.playButton.title = "Play / Pause (Space)";
+      replay.playButton.textContent = "▶";
+      replay.playButton.addEventListener("click", () => setPlaying(!replay.playing));
+
+      replay.scrubber = document.createElement("input");
+      replay.scrubber.id = "replay-scrubber";
+      replay.scrubber.type = "range";
+      replay.scrubber.min = "0";
+      replay.scrubber.max = "1";
+      replay.scrubber.step = "any";
+      replay.scrubber.value = "0";
+      replay.scrubber.addEventListener("input", () => seekTo(parseFloat(replay.scrubber.value) || 0));
+      // Keep module keyboard shortcuts from firing while the slider has
+      // focus; the slider handles arrow keys natively.
+      replay.scrubber.addEventListener("keydown", (e) => e.stopPropagation());
+
+      replay.timeLabel = document.createElement("span");
+      replay.timeLabel.id = "replay-time";
+      replay.timeLabel.className = "toolbar-hint";
+
+      const speedSelect = document.createElement("select");
+      speedSelect.id = "replay-speed";
+      speedSelect.className = "toolbar-select";
+      speedSelect.title = "Playback speed";
+      for (const multiplier of [0.25, 0.5, 1, 2, 4, 8]) {
+        const option = document.createElement("option");
+        option.value = String(multiplier);
+        option.textContent = `${multiplier}x`;
+        if (multiplier === replay.speed) option.selected = true;
+        speedSelect.appendChild(option);
+      }
+      speedSelect.addEventListener("change", () => {
+        replay.speed = parseFloat(speedSelect.value) || 1;
+        replay.previousFrame = performance.now();
+      });
+      speedSelect.addEventListener("keydown", (e) => e.stopPropagation());
+
+      bar.append(label, replay.playButton, replay.scrubber, replay.timeLabel, speedSelect);
+
+      const toolbar = document.getElementById("toolbar");
+      if (toolbar) toolbar.insertAdjacentElement("afterend", bar);
+      replay.bar = bar;
+    }
+
+    /** Materialise the {uid -> status} snapshot at `seconds` and paint it. */
+    function seekTo(seconds) {
+      const clamped = Math.min(Math.max(seconds, 0), replay.duration);
+      replay.playheadTime = clamped;
+      // Backward seek: rewind the fold and rebuild from the start.
+      if (clamped < replay.snapshotTime) {
+        replay.snapshot = {};
+        replay.cursor = 0;
+      }
+      while (replay.cursor < replay.transitions.length && replay.transitions[replay.cursor].t <= clamped) {
+        const transition = replay.transitions[replay.cursor++];
+        replay.snapshot[String(transition.uid)] = transition.status;
+      }
+      replay.snapshotTime = clamped;
+      // Fresh object each call: applyMonitorStatus stores the reference.
+      applyMonitorStatus({ ...replay.snapshot });
+      updateTransportBar();
+    }
+
+    function updateTransportBar() {
+      if (!replay.bar) return;
+      replay.scrubber.value = String(replay.playheadTime);
+      replay.timeLabel.textContent = `${formatTime(replay.playheadTime)} / ${formatTime(replay.duration)}`;
+    }
+
+    function advancePlayhead(now) {
+      replay.frameRequest = null;
+      if (!replay.mode || !replay.playing) return;
+      const elapsedSeconds = (now - replay.previousFrame) / 1000;
+      replay.previousFrame = now;
+      const next = replay.playheadTime + elapsedSeconds * replay.speed;
+      if (next >= replay.duration) {
+        seekTo(replay.duration);
+        setPlaying(false);
+        return;
+      }
+      seekTo(next);
+      replay.frameRequest = requestAnimationFrame(advancePlayhead);
+    }
+
+    function setPlaying(playing) {
+      if (playing && replay.duration <= 0) return;
+      replay.playing = playing;
+      if (replay.playButton) replay.playButton.textContent = playing ? "⏸" : "▶";
+      if (playing) {
+        // Restart from the beginning if the playhead is parked at the end.
+        if (replay.playheadTime >= replay.duration) seekTo(0);
+        replay.previousFrame = performance.now();
+        if (!replay.frameRequest) replay.frameRequest = requestAnimationFrame(advancePlayhead);
+      } else if (replay.frameRequest) {
+        cancelAnimationFrame(replay.frameRequest);
+        replay.frameRequest = null;
+      }
+    }
+
+    /** Pause, then jump to the nearest transition before/after the playhead. */
+    function stepToTransition(direction) {
+      if (!replay.transitions.length) return;
+      setPlaying(false);
+      let target;
+      if (direction > 0) {
+        target = replay.duration;
+        for (const transition of replay.transitions) {
+          if (transition.t > replay.playheadTime) { target = transition.t; break; }
+        }
+      } else {
+        target = 0;
+        for (const transition of replay.transitions) {
+          if (transition.t < replay.playheadTime) target = transition.t; else break;
+        }
+      }
+      seekTo(target);
+    }
+
+    function enterReplay(msg) {
+      // Load the embedded tree exactly like updateTree does.
+      treeData = msg.data;
+      colors = readThemeColors();
+      fileNameEl.textContent = msg.fileName || "BT Replay";
+      errorOverlay.classList.add("hidden");
+      collapsedNodes.clear();
+      selectedTreeId = null;
+      populateTreeSelector();
+      if (treeData && treeData.trees) {
+        const tree = treeData.trees.find((t) => t.id === treeData.mainTreeId) || treeData.trees[0];
+        if (tree && tree.root && countVisibleNodes(tree.root) > 30) {
+          autoCollapseDepth(tree.root, 0, autoCollapseLevel);
+        }
+      }
+      render();
+      setTimeout(fitToView, 150);
+      if (activeSidePanel === "blackboard") showBlackboard();
+      if (activeSidePanel === "palette") showPalette();
+
+      // Replay and the live monitor are mutually exclusive.
+      if (monitorActive) {
+        vscode.postMessage({ command: "stopMonitor" });
+        monitorActive = false;
+        btnMonitor.classList.remove("active");
+      }
+      btnMonitor.classList.add("hidden");
+      clearMonitorOverlay();
+
+      replay.mode = true;
+      replay.transitions = Array.isArray(msg.transitions) ? msg.transitions : [];
+      replay.duration = typeof msg.duration === "number" ? msg.duration : 0;
+      replay.snapshot = {};
+      replay.cursor = 0;
+      replay.snapshotTime = 0;
+      replay.playheadTime = 0;
+      setPlaying(false);
+
+      buildTransportBar();
+      replay.scrubber.max = String(replay.duration || 1);
+      replay.bar.classList.remove("hidden");
+      monitorStatusEl.textContent = "";
+      updateFollowButtonState();
+      seekTo(0);
+    }
+
+    function exitReplay() {
+      if (!replay.mode) return;
+      setPlaying(false);
+      replay.mode = false;
+      replay.transitions = [];
+      replay.duration = 0;
+      replay.snapshot = {};
+      replay.cursor = 0;
+      replay.snapshotTime = 0;
+      replay.playheadTime = 0;
+      if (replay.bar) replay.bar.classList.add("hidden");
+      btnMonitor.classList.remove("hidden");
+      clearMonitorOverlay();
+      updateFollowButtonState();
+    }
+
+    // A recording opens replay; opening any other tree closes it. Self-wired
+    // so the module's message handler never needs to know replay exists.
+    function handleHostMessage(event) {
+      const msg = event.data;
+      if (msg.command === "loadReplay") enterReplay(msg);
+      else if (msg.command === "updateTree" && replay.mode) exitReplay();
+    }
+
+    // Transport keys, ignored while typing in an input/select.
+    function handleTransportKeydown(e) {
+      if (!replay.mode) return;
+      const focused = document.activeElement;
+      if (focused && (focused.tagName === "INPUT" || focused.tagName === "SELECT" || focused.tagName === "TEXTAREA")) return;
+      if (e.key === " " || e.key === "Spacebar") { e.preventDefault(); setPlaying(!replay.playing); }
+      else if (e.key === "ArrowRight") { e.preventDefault(); stepToTransition(1); }
+      else if (e.key === "ArrowLeft") { e.preventDefault(); stepToTransition(-1); }
+    }
+
+    window.addEventListener("message", handleHostMessage);
+    window.addEventListener("keydown", handleTransportKeydown);
+  }
+  setUpReplayPlayback();
+
   // Ctrl/Cmd hover hint: while the modifier is held, nodes get a hyperlink
   // cursor and a focus-tinted outline so it's clear they're click-to-jump.
   function setCtrlHeld(held) {
@@ -2087,6 +2404,8 @@
     const msg = event.data;
     switch (msg.command) {
       case "updateTree":
+        // loadReplay and replay-exit-on-updateTree are handled by the replay
+        // module's own message listener (see the REPLAY closure below).
         treeData = msg.data;
         // Always re-read from CSS so colours track the live VSCode theme,
         // even if the host posted updateTree before the first themeChanged.
@@ -2143,7 +2462,9 @@
         monitorActive = false;
         btnMonitor.classList.remove("active");
         monitorStatusEl.textContent = "";
-        clearMonitorOverlay();
+        // Entering replay stops the monitor; don't let that async ack wipe the
+        // replay overlay we just painted.
+        if (!replayActive()) clearMonitorOverlay();
         updateFollowButtonState();
         break;
 

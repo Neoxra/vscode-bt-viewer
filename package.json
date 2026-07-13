@@ -37,6 +37,7 @@
   ],
   "activationEvents": [
     "onCommand:behaviortree.openViewer",
+    "onCommand:behaviortree.replayRecording",
     "onLanguage:xml"
   ],
   "main": "./dist/extension.js",
@@ -47,6 +48,12 @@
         "title": "Open Behavior Tree Viewer",
         "category": "BehaviorTree",
         "icon": "$(type-hierarchy)"
+      },
+      {
+        "command": "behaviortree.replayRecording",
+        "title": "Replay BT Recording",
+        "category": "BehaviorTree",
+        "icon": "$(play)"
       }
     ],
     "menus": {
@@ -55,12 +62,22 @@
           "when": "resourceLangId == xml",
           "command": "behaviortree.openViewer",
           "group": "navigation"
+        },
+        {
+          "when": "resourceExtname == .btlog",
+          "command": "behaviortree.replayRecording",
+          "group": "navigation"
         }
       ],
       "explorer/context": [
         {
           "when": "resourceLangId == xml",
           "command": "behaviortree.openViewer",
+          "group": "navigation"
+        },
+        {
+          "when": "resourceExtname == .btlog",
+          "command": "behaviortree.replayRecording",
           "group": "navigation"
         }
       ]
