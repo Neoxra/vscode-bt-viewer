@@ -1,25 +1,26 @@
 /**
  * @fileoverview Shared viewer context: the tree/view state and DOM references
- * every module operates on. Created once by main.ts and passed explicitly to
- * every function that needs it; no module holds state of its own.
+ * every module operates on, grouped by ownership (camera, view, scene, drag,
+ * monitor). Created once by main.ts and passed explicitly to every function
+ * that needs it; no module holds state of its own.
  */
+
+import {
+  BTNodeData,
+  BTParsedFile,
+  BTTreeData,
+  StatusMap,
+  WebviewToHostMessage,
+} from "../../shared/protocol";
 
 /** Message channel back to the extension host. */
 export interface VsCodeApi {
-  postMessage(message: unknown): void;
+  postMessage(message: WebviewToHostMessage): void;
   getState(): unknown;
   setState(state: unknown): void;
 }
 
 declare function acquireVsCodeApi(): VsCodeApi;
-
-export interface Port {
-  name: string;
-  value: string;
-  direction?: string;
-  type?: string;
-  default?: string;
-}
 
 /**
  * A tree node as parsed by the host, plus the layout fields the viewer adds.
@@ -27,15 +28,8 @@ export interface Port {
  * underscore fields are assigned by computeNodeLines()/layoutTree() before
  * any consumer reads them (same invariant the pre-TypeScript code relied on).
  */
-export interface BTNode {
-  id: string;
-  name: string;
-  type: string;
-  category: string;
-  ports: Port[];
-  children?: BTNode[];
-  uid?: number;
-  xmlLine?: number;
+export interface BTNode extends BTNodeData {
+  children: BTNode[];
 
   // Wrapped text lines, computed by computeNodeLines().
   _nameLines: string[];
@@ -58,41 +52,13 @@ export interface BTNode {
   _origCategory?: string;
 }
 
-export interface NodeModel {
-  type: string;
-  category?: string;
-  description?: string;
-  ports?: Port[];
-}
-
-export interface Tree {
-  id: string;
+export interface Tree extends BTTreeData {
   root: BTNode;
-  sourceFile?: string;
 }
 
-export interface TreeData {
+export interface TreeData extends BTParsedFile {
   trees: Tree[];
-  mainTreeId: string;
-  nodeModels?: NodeModel[];
 }
-
-export interface CategoryColor {
-  fill: string;
-  stroke: string;
-  text: string;
-}
-
-export interface StatusColors {
-  running: string;
-  success: string;
-  failure: string;
-  idle: string;
-  edge: string;
-  viewport: string;
-}
-
-export type ThemeColors = Record<string, CategoryColor> & { status: StatusColors };
 
 export interface LayoutEdge {
   sourceId: string;
@@ -104,65 +70,71 @@ export interface EdgeElement extends LayoutEdge {
   path: SVGPathElement;
 }
 
-/** uid (as string) -> status name ("RUNNING", "SUCCESS", ...). */
-export type StatusMap = Record<string, string>;
-
-/** One status change from a .btlog recording, decoded on the host side. */
-export interface ReplayTransition {
-  /** Playback time in seconds from the start of the recording. */
-  t: number;
-  /** Node uid, matching the `_uid` attribute in the tree XML. */
-  uid: number;
-  /** Status name: IDLE | RUNNING | SUCCESS | FAILURE | SKIPPED. */
-  status: string;
-}
-
 export type LayoutMode = "auto" | "horizontal" | "waterfall";
 export type SidePanelKind = "blackboard" | "palette" | "detail" | "subtreeView" | null;
 
-export interface ViewerContext {
-  readonly vscode: VsCodeApi;
-
-  // Tree/view state
-  treeData: TreeData | null;
-  colors: ThemeColors;
+/** Pan/zoom of the tree canvas, including an in-progress background pan. */
+export interface CameraState {
   zoom: number;
   panX: number;
   panY: number;
   isPanning: boolean;
   panStartX: number;
   panStartY: number;
+}
 
-  // Dragging state
-  draggedNode: BTNode | null;
-  dragOffsetX: number;
-  dragOffsetY: number;
+/** An in-progress node drag (null node = not dragging). */
+export interface DragState {
+  node: BTNode | null;
+  offsetX: number;
+  offsetY: number;
+}
 
+/** What the user chose to look at: collapse/expand, layout, search, panels. */
+export interface ViewState {
   collapsedNodes: Set<string>;
   // Per-node SubTree expansion. Keys are *layout* node ids so the same
   // referenced tree can be expanded in multiple places without colliding;
   // see buildLayoutTree() for how layout ids are namespaced.
   expandedSubtrees: Set<string>;
+  layoutMode: LayoutMode;
+  autoCollapseLevel: number;
+  selectedTreeId: string | null;
+  searchQuery: string;
+  activeSidePanel: SidePanelKind;
+  followMode: boolean;
+}
+
+/** The rendered scene: layout output and its DOM lookups, rebuilt by render(). */
+export interface SceneState {
   layoutNodes: BTNode[];
   layoutEdges: LayoutEdge[];
-
-  // Maps for efficient lookups during drag
   nodeElements: Map<string, SVGGElement>;
   edgeElements: EdgeElement[];
   nodeById: Map<string, BTNode>;
   // Parent map: nodeId -> parent node (built during flattenTree)
   parentMap: Map<string, BTNode>;
+}
 
-  followMode: boolean;
-  autoCollapseLevel: number;
-  layoutMode: LayoutMode;
-  selectedTreeId: string | null;
-  searchQuery: string;
-  activeSidePanel: SidePanelKind;
-  monitorActive: boolean;
-  monitorAvailable: boolean;
+/** Live-monitor connection state and the last painted status overlay. */
+export interface MonitorState {
+  active: boolean;
+  available: boolean;
   lastNodeStatuses: StatusMap;
   idleFadeTimer: ReturnType<typeof setTimeout> | null;
+}
+
+export interface ViewerContext {
+  readonly vscode: VsCodeApi;
+
+  treeData: TreeData | null;
+  colors: ThemeColors;
+
+  readonly camera: CameraState;
+  readonly drag: DragState;
+  readonly view: ViewState;
+  readonly scene: SceneState;
+  readonly monitor: MonitorState;
 
   // DOM refs
   readonly svg: SVGSVGElement;
@@ -200,6 +172,23 @@ export interface ViewerContext {
   readonly minimapCtx: CanvasRenderingContext2D | null;
 }
 
+export interface CategoryColor {
+  fill: string;
+  stroke: string;
+  text: string;
+}
+
+export interface StatusColors {
+  running: string;
+  success: string;
+  failure: string;
+  idle: string;
+  edge: string;
+  viewport: string;
+}
+
+export type ThemeColors = Record<string, CategoryColor> & { status: StatusColors };
+
 function byId<T extends HTMLElement>(id: string): T {
   const el = document.getElementById(id);
   if (!el) throw new Error(`Missing required element #${id}`);
@@ -225,37 +214,48 @@ export function createViewerContext(colors: ThemeColors): ViewerContext {
 
     treeData: null,
     colors,
-    zoom: 1,
-    panX: 0,
-    panY: 40,
-    isPanning: false,
-    panStartX: 0,
-    panStartY: 0,
 
-    draggedNode: null,
-    dragOffsetX: 0,
-    dragOffsetY: 0,
+    camera: {
+      zoom: 1,
+      panX: 0,
+      panY: 40,
+      isPanning: false,
+      panStartX: 0,
+      panStartY: 0,
+    },
 
-    collapsedNodes: new Set(),
-    expandedSubtrees: new Set(),
-    layoutNodes: [],
-    layoutEdges: [],
+    drag: {
+      node: null,
+      offsetX: 0,
+      offsetY: 0,
+    },
 
-    nodeElements: new Map(),
-    edgeElements: [],
-    nodeById: new Map(),
-    parentMap: new Map(),
+    view: {
+      collapsedNodes: new Set(),
+      expandedSubtrees: new Set(),
+      layoutMode: "auto",
+      autoCollapseLevel: 3,
+      selectedTreeId: null,
+      searchQuery: "",
+      activeSidePanel: null,
+      followMode: false,
+    },
 
-    followMode: false,
-    autoCollapseLevel: 3,
-    layoutMode: "auto",
-    selectedTreeId: null,
-    searchQuery: "",
-    activeSidePanel: null,
-    monitorActive: false,
-    monitorAvailable: true,
-    lastNodeStatuses: {},
-    idleFadeTimer: null,
+    scene: {
+      layoutNodes: [],
+      layoutEdges: [],
+      nodeElements: new Map(),
+      edgeElements: [],
+      nodeById: new Map(),
+      parentMap: new Map(),
+    },
+
+    monitor: {
+      active: false,
+      available: true,
+      lastNodeStatuses: {},
+      idleFadeTimer: null,
+    },
 
     svg: byId<HTMLElement>("tree-svg") as unknown as SVGSVGElement,
     treeGroup,

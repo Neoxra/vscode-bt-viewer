@@ -1,57 +1,14 @@
-export type NodeCategory =
-  | "control"
-  | "decorator"
-  | "action"
-  | "condition"
-  | "subtree"
-  | "script"
-  | "root";
-
-export interface BTPort {
-  name: string;
-  value: string;
-  direction: "input" | "output" | "inout";
-}
-
-export interface BTNodeData {
-  id: string;
-  type: string;
-  name: string;
-  category: NodeCategory;
-  ports: BTPort[];
-  children: BTNodeData[];
-  uid?: number;
-  xmlLine?: number;
-}
-
-export interface BTTreeData {
-  id: string;
-  root: BTNodeData;
-  /** Absolute path of the file this tree was parsed from. Used by the
-   * goToLine message so the host opens the correct file when the user
-   * Ctrl+clicks a node from a cross-file SubTree. */
-  sourceFile?: string;
-}
-
-export interface BTParsedFile {
-  mainTreeId: string;
-  trees: BTTreeData[];
-  nodeModels: BTNodeModel[];
-}
-
-export interface BTNodeModel {
-  type: string;
-  category: NodeCategory;
-  ports: BTPortModel[];
-  description?: string;
-}
-
-export interface BTPortModel {
-  name: string;
-  direction: "input" | "output" | "inout";
-  type?: string;
-  default?: string;
-}
+// The parsed-tree data types live in shared/protocol.ts (the host<->webview
+// contract); re-exported here so host modules keep their existing imports.
+export {
+  BTNodeData,
+  BTNodeModel,
+  BTParsedFile,
+  BTPort,
+  BTPortModel,
+  BTTreeData,
+  NodeCategory,
+} from "../shared/protocol";
 
 /** Well-known BT.CPP control flow nodes */
 export const CONTROL_NODES = new Set([

@@ -28,7 +28,6 @@ export function isMonitorAvailable(): boolean {
 
 export interface MonitorStatus {
   nodes: Record<string, string>;
-  timestamp: number;
 }
 
 const STATUS_NAMES: Record<number, string> = {
@@ -101,19 +100,21 @@ export class BTMonitor {
     let polling = false;
     let sockBusy = false;
 
-    const createSocket = () => {
+    const createSocket = (): ZmqRequestSocket => {
       if (sock) {
         try { sock.close(); } catch { /* ignore */ }
       }
-      sock = new zmq.Request();
-      sock.receiveTimeout = 2000;
-      sock.sendTimeout = 1000;
-      sock.linger = 0;
-      sock.connect(reqAddr);
+      const next = new zmq.Request();
+      next.receiveTimeout = 2000;
+      next.sendTimeout = 1000;
+      next.linger = 0;
+      sock = next;
+      next.connect(reqAddr);
       sockBusy = false;
+      return next;
     };
 
-    createSocket();
+    sock = createSocket();
 
     // Give socket time to connect before first request
     await new Promise(r => setTimeout(r, 200));
@@ -160,7 +161,7 @@ export class BTMonitor {
             if (Object.keys(nodes).length > 0) {
               hadData = true;
               failCount = 0;
-              this.onStatus({ nodes, timestamp: Date.now() / 1000 });
+              this.onStatus({ nodes });
 
               if (!treeFetched) {
                 try {
@@ -186,7 +187,7 @@ export class BTMonitor {
         // If we previously had data and now failing, BT has finished
         if (hadData && failCount >= 3) {
           this.onInfo("BT finished");
-          this.onStatus({ nodes: {}, timestamp: Date.now() / 1000 });
+          this.onStatus({ nodes: {} });
           hadData = false;
           treeFetched = false;
         }

@@ -12,7 +12,8 @@ import {
   PORT_LINE_H,
   SIBLING_GAP,
 } from "./constants";
-import { BTNode, LayoutEdge, StatusMap, Tree, ViewerContext } from "./context";
+import { StatusMap } from "../../shared/protocol";
+import { BTNode, LayoutEdge, Tree, ViewerContext } from "./context";
 
 export const LINE_H = 13; // Height per line of text
 const MAX_CHARS_PER_LINE = 22; // Wrap threshold
@@ -74,7 +75,7 @@ export const STEM_GAP = 20; // Gap between left stem line and child nodes
 export function countVisibleNodes(ctx: ViewerContext, node: BTNode): number {
   if (node._visCount !== undefined) return node._visCount;
   let count = 1;
-  if (!ctx.collapsedNodes.has(node.id)) {
+  if (!ctx.view.collapsedNodes.has(node.id)) {
     for (const child of (node.children || [])) {
       count += countVisibleNodes(ctx, child);
     }
@@ -96,7 +97,7 @@ function measureSubtree(ctx: ViewerContext, node: BTNode): void {
   const h = nodeHeight(node);
   node._w = w;
   node._h = h;
-  const isCollapsed = ctx.collapsedNodes.has(node.id);
+  const isCollapsed = ctx.view.collapsedNodes.has(node.id);
   const children = isCollapsed ? [] : (node.children || []);
 
   if (children.length === 0) {
@@ -109,8 +110,8 @@ function measureSubtree(ctx: ViewerContext, node: BTNode): void {
 
   // Decide layout: manual override or auto based on subtree size
   const subtreeSize = countVisibleNodes(ctx, node);
-  const goVertical = ctx.layoutMode === "waterfall" ? (children.length > 1)
-    : ctx.layoutMode === "horizontal" ? false
+  const goVertical = ctx.view.layoutMode === "waterfall" ? (children.length > 1)
+    : ctx.view.layoutMode === "horizontal" ? false
     : (subtreeSize >= WATERFALL_THRESHOLD && children.length > 1);
 
   if (goVertical) {
@@ -142,7 +143,7 @@ function measureSubtree(ctx: ViewerContext, node: BTNode): void {
 }
 
 function positionSubtree(ctx: ViewerContext, node: BTNode, offsetX: number, offsetY: number): void {
-  const isCollapsed = ctx.collapsedNodes.has(node.id);
+  const isCollapsed = ctx.view.collapsedNodes.has(node.id);
   const children = isCollapsed ? [] : (node.children || []);
 
   if (node._vertical && children.length > 1) {
@@ -192,7 +193,7 @@ function positionSubtree(ctx: ViewerContext, node: BTNode, offsetX: number, offs
 export function autoCollapseDepth(ctx: ViewerContext, node: BTNode, depth: number, maxDepth: number): void {
   if (!node.children || node.children.length === 0) return;
   if (depth >= maxDepth) {
-    ctx.collapsedNodes.add(node.id);
+    ctx.view.collapsedNodes.add(node.id);
     return;
   }
   for (const child of node.children) {
@@ -229,7 +230,7 @@ export function expandRunningPath(
 
   // On the running path: expand it. Set.delete reports whether it removed
   // anything, so we only flag a genuine change.
-  if (anyRunning && ctx.collapsedNodes.delete(node.id)) {
+  if (anyRunning && ctx.view.collapsedNodes.delete(node.id)) {
     changed.value = true;
   }
 
@@ -256,8 +257,8 @@ export function flattenTree(
   parent: BTNode | null,
 ): void {
   nodes.push(node);
-  if (parent) ctx.parentMap.set(node.id, parent);
-  const isCollapsed = ctx.collapsedNodes.has(node.id);
+  if (parent) ctx.scene.parentMap.set(node.id, parent);
+  const isCollapsed = ctx.view.collapsedNodes.has(node.id);
   const children = isCollapsed ? [] : (node.children || []);
 
   for (const child of children) {
@@ -298,9 +299,9 @@ export function edgePath(source: BTNode, target: BTNode, vertical: boolean): str
 }
 
 export function updateAllEdges(ctx: ViewerContext): void {
-  for (const e of ctx.edgeElements) {
-    const source = ctx.nodeById.get(e.sourceId);
-    const target = ctx.nodeById.get(e.targetId);
+  for (const e of ctx.scene.edgeElements) {
+    const source = ctx.scene.nodeById.get(e.sourceId);
+    const target = ctx.scene.nodeById.get(e.targetId);
     if (source && target) {
       e.path.setAttribute("d", edgePath(source, target, e.vertical));
     }
@@ -325,7 +326,7 @@ export function buildLayoutTree(
   const out: BTNode = { ...node, id: layoutId, _origId: node.id, _sourceFile: sourceFile };
   if (
     node.category === "subtree" &&
-    ctx.expandedSubtrees.has(layoutId) &&
+    ctx.view.expandedSubtrees.has(layoutId) &&
     ctx.treeData && ctx.treeData.trees
   ) {
     const refName = (node.ports.find(p => p.name === "ID") || {}).value || node.name;
@@ -346,7 +347,7 @@ export function buildLayoutTree(
 /** Resolve the currently-selected tree (falls back to the main/first tree). */
 export function getActiveTree(ctx: ViewerContext): Tree | null {
   if (!ctx.treeData || !ctx.treeData.trees) return null;
-  const treeId = ctx.selectedTreeId || ctx.treeData.mainTreeId;
+  const treeId = ctx.view.selectedTreeId || ctx.treeData.mainTreeId;
   return ctx.treeData.trees.find(t => t.id === treeId) || ctx.treeData.trees[0] || null;
 }
 
@@ -365,10 +366,10 @@ export function expandAllSubtrees(ctx: ViewerContext, tree: Tree): void {
     const stack = [layoutRoot];
     while (stack.length) {
       const n = stack.pop()!;
-      if (n.category === "subtree" && !ctx.expandedSubtrees.has(n.id)) {
+      if (n.category === "subtree" && !ctx.view.expandedSubtrees.has(n.id)) {
         const refName = (n.ports.find(p => p.name === "ID") || {}).value || n.name;
         if (ctx.treeData!.trees.some(t => t.id === refName)) {
-          ctx.expandedSubtrees.add(n.id);
+          ctx.view.expandedSubtrees.add(n.id);
           added = true;
         }
       }
@@ -388,7 +389,7 @@ export interface TreeBounds {
 
 export function getTreeBounds(ctx: ViewerContext): TreeBounds {
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const node of ctx.layoutNodes) {
+  for (const node of ctx.scene.layoutNodes) {
     minX = Math.min(minX, node._x);
     minY = Math.min(minY, node._y);
     maxX = Math.max(maxX, node._x + node._w);

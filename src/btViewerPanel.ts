@@ -4,6 +4,7 @@ import { parseBTXml } from "./btParser";
 import { BTParsedFile, BTNodeData } from "./types";
 import { BTMonitor, isMonitorAvailable } from "./btMonitor";
 import { BtLogReplay } from "./btLogReader";
+import { HostToWebviewMessage, WebviewToHostMessage } from "../shared/protocol";
 
 function debounce<T extends (...args: any[]) => void>(fn: T, ms: number): T {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -91,6 +92,11 @@ export class BTViewerPanel {
     instance.showReplay(uri, replay);
   }
 
+  /** Send a message to the webview, checked against the shared protocol. */
+  private post(message: HostToWebviewMessage): void {
+    this.panel.webview.postMessage(message);
+  }
+
   private constructor(panel: vscode.WebviewPanel, extensionUri: vscode.Uri, document: vscode.TextDocument | undefined) {
     this.panel = panel;
     this.extensionUri = extensionUri;
@@ -98,7 +104,7 @@ export class BTViewerPanel {
 
     this.panel.webview.html = this.getWebviewContent();
     this.sendTreeData();
-    this.panel.webview.postMessage({
+    this.post({
       command: "monitorAvailability",
       available: isMonitorAvailable(),
       reason: isMonitorAvailable()
@@ -108,7 +114,7 @@ export class BTViewerPanel {
 
     // Handle messages from webview
     this.panel.webview.onDidReceiveMessage(
-      (message) => {
+      (message: WebviewToHostMessage) => {
         switch (message.command) {
           case "goToLine":
             if (message.line) {
@@ -146,7 +152,7 @@ export class BTViewerPanel {
             break;
           case "startMonitor": {
             if (!isMonitorAvailable()) {
-              this.panel.webview.postMessage({
+              this.post({
                 command: "monitorError",
                 message: "Live monitoring unavailable: zeromq native binary not loaded for this platform",
               });
@@ -161,10 +167,11 @@ export class BTViewerPanel {
           case "stopMonitor":
             this.stopMonitor();
             break;
-          case "fitToView":
-            break;
           case "exportPdf":
             this.handleExportPdf(message.bytes, message.fileName);
+            break;
+          case "exportPdfError":
+            vscode.window.showErrorMessage(`BT Viewer: PDF export failed: ${message.message}`);
             break;
         }
       },
@@ -185,7 +192,7 @@ export class BTViewerPanel {
     );
 
     vscode.window.onDidChangeActiveColorTheme(
-      () => this.panel.webview.postMessage({ command: "themeChanged" }),
+      () => this.post({ command: "themeChanged" }),
       null,
       this.disposables
     );
@@ -229,7 +236,7 @@ export class BTViewerPanel {
 
     try {
       const parsed = parseBTXml(replay.xml);
-      this.panel.webview.postMessage({
+      this.post({
         command: "loadReplay",
         data: parsed,
         fileName: path.basename(uri.fsPath),
@@ -238,7 +245,7 @@ export class BTViewerPanel {
         recordedAtMs: replay.recordedAtMs,
       });
     } catch (e: any) {
-      this.panel.webview.postMessage({
+      this.post({
         command: "error",
         message: `Failed to parse tree from recording: ${e?.message || e}`,
       });
@@ -253,23 +260,22 @@ export class BTViewerPanel {
 
     this.monitor = new BTMonitor({
       onStatus: (status) => {
-        this.panel.webview.postMessage({
+        this.post({
           command: "monitorStatus",
           nodes: status.nodes,
-          timestamp: status.timestamp,
         });
       },
       onInfo: (message) => {
-        this.panel.webview.postMessage({
+        this.post({
           command: "monitorInfo",
           message,
         });
         if (message === "Monitoring active") {
-          this.panel.webview.postMessage({ command: "monitorConnected" });
+          this.post({ command: "monitorConnected" });
         }
       },
       onError: (message) => {
-        this.panel.webview.postMessage({
+        this.post({
           command: "monitorError",
           message,
         });
@@ -279,11 +285,10 @@ export class BTViewerPanel {
         // SubTree expansion is now per-node in the webview, not a global flag.
         try {
           const parsed = parseBTXml(xml);
-          this.panel.webview.postMessage({
+          this.post({
             command: "updateTree",
             data: parsed,
             fileName: "(live)",
-            fromMonitor: true,
           });
         } catch {
           // If parsing fails, continue with the file-based tree
@@ -400,7 +405,7 @@ export class BTViewerPanel {
     if (this.monitor) {
       this.monitor.stop();
       this.monitor = null;
-      this.panel.webview.postMessage({ command: "monitorStopped" });
+      this.post({ command: "monitorStopped" });
     }
   }
 
@@ -412,13 +417,13 @@ export class BTViewerPanel {
       let parsed: BTParsedFile = parseBTXml(this.currentDocument.getText());
       for (const tree of parsed.trees) tree.sourceFile = docPath;
       parsed = await this.resolveExternalSubtrees(parsed);
-      this.panel.webview.postMessage({
+      this.post({
         command: "updateTree",
         data: parsed,
         fileName: path.basename(this.currentDocument.uri.fsPath),
       });
     } catch (e: any) {
-      this.panel.webview.postMessage({
+      this.post({
         command: "error",
         message: e.message || "Failed to parse XML",
       });

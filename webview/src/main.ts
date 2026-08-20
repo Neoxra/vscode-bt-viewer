@@ -6,8 +6,9 @@
  * in real time.
  */
 
+import { HostToWebviewMessage } from "../../shared/protocol";
 import { readThemeColors } from "./constants";
-import { createViewerContext } from "./context";
+import { createViewerContext, TreeData } from "./context";
 import { fitToView, initPanZoom, updateTransform } from "./interaction";
 import { autoCollapseDepth, countVisibleNodes } from "./layout";
 import { initMinimap } from "./minimap";
@@ -46,9 +47,9 @@ window.addEventListener("blur", () => setCtrlHeld(false));
 // Keyboard shortcuts
 window.addEventListener("keydown", (e) => {
   if (e.key === "f" || e.key === "F") fitToView(ctx);
-  if (e.key === "+" || e.key === "=") { ctx.zoom = Math.min(5, ctx.zoom * 1.2); updateTransform(ctx); }
-  if (e.key === "-") { ctx.zoom = Math.max(0.1, ctx.zoom / 1.2); updateTransform(ctx); }
-  if (e.key === "0") { ctx.zoom = 1; updateTransform(ctx); }
+  if (e.key === "+" || e.key === "=") { ctx.camera.zoom = Math.min(5, ctx.camera.zoom * 1.2); updateTransform(ctx); }
+  if (e.key === "-") { ctx.camera.zoom = Math.max(0.1, ctx.camera.zoom / 1.2); updateTransform(ctx); }
+  if (e.key === "0") { ctx.camera.zoom = 1; updateTransform(ctx); }
   if (e.key === "r" || e.key === "R") { render(ctx); setTimeout(() => fitToView(ctx), 50); }
   // Ctrl+F to focus search
   if ((e.ctrlKey || e.metaKey) && e.key === "f") {
@@ -58,36 +59,36 @@ window.addEventListener("keydown", (e) => {
 });
 
 window.addEventListener("message", (event) => {
-  const msg = event.data;
+  const msg = event.data as HostToWebviewMessage;
   switch (msg.command) {
     case "updateTree":
       // loadReplay and replay-exit-on-updateTree are handled by the replay
       // module's own message listener (see setUpReplayPlayback).
-      ctx.treeData = msg.data;
+      ctx.treeData = msg.data as TreeData;
       // Always re-read from CSS so colours track the live VSCode theme,
       // even if the host posted updateTree before the first themeChanged.
       ctx.colors = readThemeColors();
       ctx.fileNameEl.textContent = msg.fileName || "Behavior Tree";
       ctx.errorOverlay.classList.add("hidden");
-      ctx.collapsedNodes.clear();
-      ctx.selectedTreeId = null;
+      ctx.view.collapsedNodes.clear();
+      ctx.view.selectedTreeId = null;
       populateTreeSelector(ctx);
       // Auto-collapse deep branches for large trees
       if (ctx.treeData && ctx.treeData.trees) {
-        const treeId = ctx.selectedTreeId || ctx.treeData.mainTreeId;
+        const treeId = ctx.view.selectedTreeId || ctx.treeData.mainTreeId;
         const tree = ctx.treeData.trees.find(t => t.id === treeId) || ctx.treeData.trees[0];
         if (tree && tree.root) {
           const total = countVisibleNodes(ctx, tree.root);
           if (total > 30) {
-            autoCollapseDepth(ctx, tree.root, 0, ctx.autoCollapseLevel);
+            autoCollapseDepth(ctx, tree.root, 0, ctx.view.autoCollapseLevel);
           }
         }
       }
       render(ctx);
       setTimeout(() => fitToView(ctx), 150);
       // Refresh side panel if open
-      if (ctx.activeSidePanel === "blackboard") showBlackboard(ctx);
-      if (ctx.activeSidePanel === "palette") showPalette(ctx);
+      if (ctx.view.activeSidePanel === "blackboard") showBlackboard(ctx);
+      if (ctx.view.activeSidePanel === "palette") showPalette(ctx);
       break;
 
     case "error":
@@ -110,13 +111,13 @@ window.addEventListener("message", (event) => {
       break;
 
     case "monitorConnected":
-      ctx.monitorActive = true;
+      ctx.monitor.active = true;
       ctx.btnMonitor.classList.add("active");
       updateFollowButtonState(ctx);
       break;
 
     case "monitorStopped":
-      ctx.monitorActive = false;
+      ctx.monitor.active = false;
       ctx.btnMonitor.classList.remove("active");
       ctx.monitorStatusEl.textContent = "";
       // Entering replay stops the monitor; don't let that async ack wipe the
@@ -126,8 +127,8 @@ window.addEventListener("message", (event) => {
       break;
 
     case "monitorAvailability":
-      ctx.monitorAvailable = !!msg.available;
-      if (ctx.monitorAvailable) {
+      ctx.monitor.available = !!msg.available;
+      if (ctx.monitor.available) {
         ctx.btnMonitor.classList.remove("disabled");
         ctx.btnMonitor.removeAttribute("aria-disabled");
         ctx.btnMonitor.title = "Live monitor via ZMQ (port 1666)";
@@ -147,8 +148,8 @@ window.addEventListener("message", (event) => {
         render(ctx);
         // Side panel content embeds the chart hexes inline (border-left
         // styles, swatches), so refresh whichever is open.
-        if (ctx.activeSidePanel === "blackboard") showBlackboard(ctx);
-        if (ctx.activeSidePanel === "palette") showPalette(ctx);
+        if (ctx.view.activeSidePanel === "blackboard") showBlackboard(ctx);
+        if (ctx.view.activeSidePanel === "palette") showPalette(ctx);
       }
       break;
   }

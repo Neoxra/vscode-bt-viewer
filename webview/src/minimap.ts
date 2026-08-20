@@ -10,7 +10,7 @@ import { updateTransform } from "./interaction";
 
 export function drawMinimap(ctx: ViewerContext): void {
   const { minimap, minimapCtx } = ctx;
-  if (!minimapCtx || !minimap || ctx.layoutNodes.length === 0) {
+  if (!minimapCtx || !minimap || ctx.scene.layoutNodes.length === 0) {
     if (minimap) minimap.style.display = "none";
     return;
   }
@@ -22,10 +22,10 @@ export function drawMinimap(ctx: ViewerContext): void {
   // Hide minimap if entire tree fits on screen
   const bounds = getTreeBounds(ctx);
   const containerRect = ctx.container.getBoundingClientRect();
-  const viewL = -ctx.panX / ctx.zoom;
-  const viewT = -ctx.panY / ctx.zoom;
-  const viewR = viewL + containerRect.width / ctx.zoom;
-  const viewB = viewT + containerRect.height / ctx.zoom;
+  const viewL = -ctx.camera.panX / ctx.camera.zoom;
+  const viewT = -ctx.camera.panY / ctx.camera.zoom;
+  const viewR = viewL + containerRect.width / ctx.camera.zoom;
+  const viewB = viewT + containerRect.height / ctx.camera.zoom;
   const allVisible = bounds.minX >= viewL && bounds.maxX <= viewR && bounds.minY >= viewT && bounds.maxY <= viewB;
   canvas.style.display = allVisible ? "none" : "block";
   if (allVisible) return;
@@ -45,9 +45,9 @@ export function drawMinimap(ctx: ViewerContext): void {
   // Draw edges
   c2d.strokeStyle = (ctx.colors.status && ctx.colors.status.edge) || "#555";
   c2d.lineWidth = 0.5;
-  for (const e of ctx.edgeElements) {
-    const src = ctx.nodeById.get(e.sourceId);
-    const tgt = ctx.nodeById.get(e.targetId);
+  for (const e of ctx.scene.edgeElements) {
+    const src = ctx.scene.nodeById.get(e.sourceId);
+    const tgt = ctx.scene.nodeById.get(e.targetId);
     if (!src || !tgt) continue;
     c2d.beginPath();
     c2d.moveTo(ox + (src._x + src._w / 2) * scale, oy + (src._y + src._h) * scale);
@@ -56,7 +56,7 @@ export function drawMinimap(ctx: ViewerContext): void {
   }
 
   // Draw nodes as small colored rectangles
-  for (const node of ctx.layoutNodes) {
+  for (const node of ctx.scene.layoutNodes) {
     const cat = node.category || "action";
     const color = ctx.colors[cat] || { fill: "#555" };
 
@@ -66,7 +66,7 @@ export function drawMinimap(ctx: ViewerContext): void {
     const nh = Math.max(node._h * scale, 1.5);
 
     // Highlight running nodes using the same palette as the SVG view.
-    const el = ctx.nodeElements.get(node.id);
+    const el = ctx.scene.nodeElements.get(node.id);
     const status = ctx.colors.status || {};
     if (el && el.classList.contains("status-running")) {
       c2d.fillStyle = status.running || color.fill;
@@ -81,10 +81,10 @@ export function drawMinimap(ctx: ViewerContext): void {
   }
 
   // Draw viewport rectangle (reuse containerRect from above)
-  const vx = ox + (-ctx.panX / ctx.zoom) * scale;
-  const vy = oy + (-ctx.panY / ctx.zoom) * scale;
-  const vw = (containerRect.width / ctx.zoom) * scale;
-  const vh = (containerRect.height / ctx.zoom) * scale;
+  const vx = ox + (-ctx.camera.panX / ctx.camera.zoom) * scale;
+  const vy = oy + (-ctx.camera.panY / ctx.camera.zoom) * scale;
+  const vw = (containerRect.width / ctx.camera.zoom) * scale;
+  const vh = (containerRect.height / ctx.camera.zoom) * scale;
 
   c2d.strokeStyle = (ctx.colors.status && ctx.colors.status.viewport) || "#fff";
   c2d.lineWidth = 1.5;
@@ -99,7 +99,7 @@ export function initMinimap(ctx: ViewerContext): void {
   let minimapDragging = false;
 
   function minimapNavigate(e: MouseEvent): void {
-    if (ctx.layoutNodes.length === 0) return;
+    if (ctx.scene.layoutNodes.length === 0) return;
     const rect = minimap!.getBoundingClientRect();
     const mx = e.clientX - rect.left;
     const my = e.clientY - rect.top;
@@ -120,8 +120,8 @@ export function initMinimap(ctx: ViewerContext): void {
     const treeX = (mx - ox) / scale;
     const treeY = (my - oy) / scale;
 
-    ctx.panX = -treeX * ctx.zoom + containerRect.width / 2;
-    ctx.panY = -treeY * ctx.zoom + containerRect.height / 2;
+    ctx.camera.panX = -treeX * ctx.camera.zoom + containerRect.width / 2;
+    ctx.camera.panY = -treeY * ctx.camera.zoom + containerRect.height / 2;
     updateTransform(ctx);
   }
 

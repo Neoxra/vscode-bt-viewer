@@ -12,37 +12,37 @@ import { drawMinimap } from "./minimap";
 // ------ NODE DRAGGING ------
 
 export function startNodeDrag(ctx: ViewerContext, e: MouseEvent, node: BTNode): void {
-  ctx.draggedNode = node;
+  ctx.drag.node = node;
   const svgPoint = screenToSvg(ctx, e.clientX, e.clientY);
-  ctx.dragOffsetX = svgPoint.x - node._x;
-  ctx.dragOffsetY = svgPoint.y - node._y;
+  ctx.drag.offsetX = svgPoint.x - node._x;
+  ctx.drag.offsetY = svgPoint.y - node._y;
   hideTooltip(ctx);
 
-  const el = ctx.nodeElements.get(node.id);
+  const el = ctx.scene.nodeElements.get(node.id);
   if (el) el.classList.add("dragging");
 }
 
 function handleNodeDrag(ctx: ViewerContext, e: MouseEvent): void {
-  if (!ctx.draggedNode) return;
+  if (!ctx.drag.node) return;
 
   const svgPoint = screenToSvg(ctx, e.clientX, e.clientY);
-  const newX = svgPoint.x - ctx.dragOffsetX;
-  const newY = svgPoint.y - ctx.dragOffsetY;
-  const dx = newX - ctx.draggedNode._x;
-  const dy = newY - ctx.draggedNode._y;
+  const newX = svgPoint.x - ctx.drag.offsetX;
+  const newY = svgPoint.y - ctx.drag.offsetY;
+  const dx = newX - ctx.drag.node._x;
+  const dy = newY - ctx.drag.node._y;
 
   // Just move the subtree, no collision during drag
-  moveSubtreeBy(ctx, ctx.draggedNode, dx, dy);
+  moveSubtreeBy(ctx, ctx.drag.node, dx, dy);
   updateAllNodePositions(ctx);
   updateAllEdges(ctx);
 }
 
 function endNodeDrag(ctx: ViewerContext): void {
-  if (ctx.draggedNode) {
-    const el = ctx.nodeElements.get(ctx.draggedNode.id);
+  if (ctx.drag.node) {
+    const el = ctx.scene.nodeElements.get(ctx.drag.node.id);
     if (el) el.classList.remove("dragging");
 
-    ctx.draggedNode = null;
+    ctx.drag.node = null;
     // On release: resolve all overlaps with animated settle
     animateSettle(ctx);
   }
@@ -52,7 +52,7 @@ function endNodeDrag(ctx: ViewerContext): void {
 function moveSubtreeBy(ctx: ViewerContext, node: BTNode, dx: number, dy: number): void {
   node._x += dx;
   node._y += dy;
-  const isCollapsed = ctx.collapsedNodes.has(node.id);
+  const isCollapsed = ctx.view.collapsedNodes.has(node.id);
   if (!isCollapsed && node.children) {
     for (const child of node.children) {
       moveSubtreeBy(ctx, child, dx, dy);
@@ -69,7 +69,7 @@ function animateSettle(ctx: ViewerContext): void {
 
   // 1. Snapshot current positions as animation start
   const startPos = new Map<string, { x: number; y: number }>();
-  for (const node of ctx.layoutNodes) {
+  for (const node of ctx.scene.layoutNodes) {
     startPos.set(node.id, { x: node._x, y: node._y });
   }
 
@@ -77,10 +77,10 @@ function animateSettle(ctx: ViewerContext): void {
   for (let pass = 0; pass < 6; pass++) {
     let anyPushed = false;
 
-    for (let i = 0; i < ctx.layoutNodes.length; i++) {
-      const a = ctx.layoutNodes[i];
-      for (let j = i + 1; j < ctx.layoutNodes.length; j++) {
-        const b = ctx.layoutNodes[j];
+    for (let i = 0; i < ctx.scene.layoutNodes.length; i++) {
+      const a = ctx.scene.layoutNodes[i];
+      for (let j = i + 1; j < ctx.scene.layoutNodes.length; j++) {
+        const b = ctx.scene.layoutNodes[j];
 
         const hOverlap = Math.min(a._x + a._w, b._x + b._w) - Math.max(a._x, b._x);
         const vOverlap = Math.min(a._y + a._h, b._y + b._h) - Math.max(a._y, b._y);
@@ -107,13 +107,13 @@ function animateSettle(ctx: ViewerContext): void {
 
   // 3. Record final positions
   const endPos = new Map<string, { x: number; y: number }>();
-  for (const node of ctx.layoutNodes) {
+  for (const node of ctx.scene.layoutNodes) {
     endPos.set(node.id, { x: node._x, y: node._y });
   }
 
   // 4. Check if anything actually moved
   let anyMoved = false;
-  for (const node of ctx.layoutNodes) {
+  for (const node of ctx.scene.layoutNodes) {
     const s = startPos.get(node.id)!;
     const e = endPos.get(node.id)!;
     if (Math.abs(s.x - e.x) > 0.5 || Math.abs(s.y - e.y) > 0.5) {
@@ -124,7 +124,7 @@ function animateSettle(ctx: ViewerContext): void {
   if (!anyMoved) return;
 
   // 5. Reset to start positions, then animate to end
-  for (const node of ctx.layoutNodes) {
+  for (const node of ctx.scene.layoutNodes) {
     const s = startPos.get(node.id)!;
     node._x = s.x;
     node._y = s.y;
@@ -137,7 +137,7 @@ function animateSettle(ctx: ViewerContext): void {
     const t = Math.min((now - startTime) / duration, 1);
     const ease = 1 - Math.pow(1 - t, 3); // ease-out cubic
 
-    for (const node of ctx.layoutNodes) {
+    for (const node of ctx.scene.layoutNodes) {
       const s = startPos.get(node.id)!;
       const e = endPos.get(node.id)!;
       node._x = s.x + (e.x - s.x) * ease;
@@ -155,8 +155,8 @@ function animateSettle(ctx: ViewerContext): void {
 
 /** Sync all node DOM elements to their current _x, _y positions. */
 function updateAllNodePositions(ctx: ViewerContext): void {
-  for (const node of ctx.layoutNodes) {
-    const el = ctx.nodeElements.get(node.id);
+  for (const node of ctx.scene.layoutNodes) {
+    const el = ctx.scene.nodeElements.get(node.id);
     if (el) {
       el.setAttribute("transform", `translate(${node._x}, ${node._y})`);
     }
@@ -167,15 +167,15 @@ function updateAllNodePositions(ctx: ViewerContext): void {
 function screenToSvg(ctx: ViewerContext, clientX: number, clientY: number): { x: number; y: number } {
   const rect = ctx.container.getBoundingClientRect();
   return {
-    x: (clientX - rect.left - ctx.panX) / ctx.zoom,
-    y: (clientY - rect.top - ctx.panY) / ctx.zoom,
+    x: (clientX - rect.left - ctx.camera.panX) / ctx.camera.zoom,
+    y: (clientY - rect.top - ctx.camera.panY) / ctx.camera.zoom,
   };
 }
 
 // ------ TOOLTIP ------
 
 export function showTooltip(ctx: ViewerContext, event: MouseEvent, node: BTNode): void {
-  if (ctx.draggedNode) return; // No tooltip while dragging
+  if (ctx.drag.node) return; // No tooltip while dragging
 
   let html = `<div class="tt-title">${escHtml(node.name)}</div>`;
   html += `<div class="tt-type">${escHtml(node.type)} (${node.category})</div>`;
@@ -220,16 +220,16 @@ export function escHtml(str: string | null | undefined): string {
 // ------ PAN & ZOOM ------
 
 export function updateTransform(ctx: ViewerContext): void {
-  ctx.treeGroup.setAttribute("transform", `translate(${ctx.panX}, ${ctx.panY}) scale(${ctx.zoom})`);
-  ctx.zoomLevelEl.textContent = Math.round(ctx.zoom * 100) + "%";
+  ctx.treeGroup.setAttribute("transform", `translate(${ctx.camera.panX}, ${ctx.camera.panY}) scale(${ctx.camera.zoom})`);
+  ctx.zoomLevelEl.textContent = Math.round(ctx.camera.zoom * 100) + "%";
   drawMinimap(ctx);
 }
 
 export function fitToView(ctx: ViewerContext): void {
-  if (ctx.layoutNodes.length === 0) return;
+  if (ctx.scene.layoutNodes.length === 0) return;
 
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const node of ctx.layoutNodes) {
+  for (const node of ctx.scene.layoutNodes) {
     minX = Math.min(minX, node._x);
     minY = Math.min(minY, node._y);
     maxX = Math.max(maxX, node._x + node._w);
@@ -250,11 +250,11 @@ export function fitToView(ctx: ViewerContext): void {
 
   const scaleX = (containerRect.width - padX * 2) / treeW;
   const scaleY = (containerRect.height - padY * 2) / treeH;
-  ctx.zoom = Math.min(scaleX, scaleY, 1.5);
-  ctx.zoom = Math.max(ctx.zoom, 0.15);
+  ctx.camera.zoom = Math.min(scaleX, scaleY, 1.5);
+  ctx.camera.zoom = Math.max(ctx.camera.zoom, 0.15);
 
-  ctx.panX = (containerRect.width - treeW * ctx.zoom) / 2 - minX * ctx.zoom;
-  ctx.panY = padY - minY * ctx.zoom;
+  ctx.camera.panX = (containerRect.width - treeW * ctx.camera.zoom) / 2 - minX * ctx.camera.zoom;
+  ctx.camera.panY = padY - minY * ctx.camera.zoom;
 
   updateTransform(ctx);
 }
@@ -264,21 +264,21 @@ export function initPanZoom(ctx: ViewerContext): void {
   // Background pan: mousedown on SVG background
   ctx.container.addEventListener("mousedown", (e) => {
     // Only start pan if clicking on background (not a node)
-    if (ctx.draggedNode) return;
-    ctx.isPanning = true;
-    ctx.panStartX = e.clientX - ctx.panX;
-    ctx.panStartY = e.clientY - ctx.panY;
+    if (ctx.drag.node) return;
+    ctx.camera.isPanning = true;
+    ctx.camera.panStartX = e.clientX - ctx.camera.panX;
+    ctx.camera.panStartY = e.clientY - ctx.camera.panY;
     ctx.container.classList.add("dragging");
   });
 
   window.addEventListener("mousemove", (e) => {
-    if (ctx.draggedNode) {
+    if (ctx.drag.node) {
       handleNodeDrag(ctx, e);
       return;
     }
-    if (ctx.isPanning) {
-      ctx.panX = e.clientX - ctx.panStartX;
-      ctx.panY = e.clientY - ctx.panStartY;
+    if (ctx.camera.isPanning) {
+      ctx.camera.panX = e.clientX - ctx.camera.panStartX;
+      ctx.camera.panY = e.clientY - ctx.camera.panStartY;
       updateTransform(ctx);
     }
     // Update tooltip position
@@ -289,10 +289,10 @@ export function initPanZoom(ctx: ViewerContext): void {
   });
 
   window.addEventListener("mouseup", () => {
-    if (ctx.draggedNode) {
+    if (ctx.drag.node) {
       endNodeDrag(ctx);
     }
-    ctx.isPanning = false;
+    ctx.camera.isPanning = false;
     ctx.container.classList.remove("dragging");
   });
 
@@ -302,12 +302,12 @@ export function initPanZoom(ctx: ViewerContext): void {
     const mouseX = e.clientX - rect.left;
     const mouseY = e.clientY - rect.top;
 
-    const prevZoom = ctx.zoom;
+    const prevZoom = ctx.camera.zoom;
     const delta = e.deltaY > 0 ? 0.9 : 1.1;
-    ctx.zoom = Math.max(0.1, Math.min(5, ctx.zoom * delta));
+    ctx.camera.zoom = Math.max(0.1, Math.min(5, ctx.camera.zoom * delta));
 
-    ctx.panX = mouseX - (mouseX - ctx.panX) * (ctx.zoom / prevZoom);
-    ctx.panY = mouseY - (mouseY - ctx.panY) * (ctx.zoom / prevZoom);
+    ctx.camera.panX = mouseX - (mouseX - ctx.camera.panX) * (ctx.camera.zoom / prevZoom);
+    ctx.camera.panY = mouseY - (mouseY - ctx.camera.panY) * (ctx.camera.zoom / prevZoom);
 
     updateTransform(ctx);
   }, { passive: false });

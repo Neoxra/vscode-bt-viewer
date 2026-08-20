@@ -24,14 +24,8 @@ enum NodeStatus {
   Skipped = 4,
 }
 
-export interface ReplayTransition {
-  /** Playback time in seconds from the start of the recording. */
-  t: number;
-  /** Node uid, matching the `_uid` attribute in the embedded XML. */
-  uid: number;
-  /** Status name: IDLE | RUNNING | SUCCESS | FAILURE | SKIPPED. */
-  status: string;
-}
+import { ReplayTransition } from "../shared/protocol";
+export { ReplayTransition };
 
 export interface BtLogReplay {
   /** The full tree XML embedded in the recording (parse with parseBTXml). */

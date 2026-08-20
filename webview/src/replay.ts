@@ -7,7 +7,8 @@
  * DOM.
  */
 
-import { ReplayTransition, StatusMap, TreeData, ViewerContext } from "./context";
+import { HostToWebviewMessage, LoadReplayMessage, ReplayTransition, StatusMap } from "../../shared/protocol";
+import { TreeData, ViewerContext } from "./context";
 import { fitToView } from "./interaction";
 import { autoCollapseDepth, countVisibleNodes } from "./layout";
 import { readThemeColors } from "./constants";
@@ -19,15 +20,6 @@ import {
 import { render } from "./render";
 import { showBlackboard, showPalette } from "./sidePanels";
 import { populateTreeSelector } from "./toolbar";
-
-interface LoadReplayMessage {
-  command: "loadReplay";
-  data: TreeData;
-  fileName?: string;
-  transitions?: ReplayTransition[];
-  duration?: number;
-  recordedAtMs?: number;
-}
 
 export function setUpReplayPlayback(ctx: ViewerContext): void {
   const replay = {
@@ -187,28 +179,28 @@ export function setUpReplayPlayback(ctx: ViewerContext): void {
 
   function enterReplay(msg: LoadReplayMessage): void {
     // Load the embedded tree exactly like updateTree does.
-    ctx.treeData = msg.data;
+    ctx.treeData = msg.data as TreeData;
     ctx.colors = readThemeColors();
     ctx.fileNameEl.textContent = msg.fileName || "BT Replay";
     ctx.errorOverlay.classList.add("hidden");
-    ctx.collapsedNodes.clear();
-    ctx.selectedTreeId = null;
+    ctx.view.collapsedNodes.clear();
+    ctx.view.selectedTreeId = null;
     populateTreeSelector(ctx);
     if (ctx.treeData && ctx.treeData.trees) {
       const tree = ctx.treeData.trees.find((t) => t.id === ctx.treeData!.mainTreeId) || ctx.treeData.trees[0];
       if (tree && tree.root && countVisibleNodes(ctx, tree.root) > 30) {
-        autoCollapseDepth(ctx, tree.root, 0, ctx.autoCollapseLevel);
+        autoCollapseDepth(ctx, tree.root, 0, ctx.view.autoCollapseLevel);
       }
     }
     render(ctx);
     setTimeout(() => fitToView(ctx), 150);
-    if (ctx.activeSidePanel === "blackboard") showBlackboard(ctx);
-    if (ctx.activeSidePanel === "palette") showPalette(ctx);
+    if (ctx.view.activeSidePanel === "blackboard") showBlackboard(ctx);
+    if (ctx.view.activeSidePanel === "palette") showPalette(ctx);
 
     // Replay and the live monitor are mutually exclusive.
-    if (ctx.monitorActive) {
+    if (ctx.monitor.active) {
       ctx.vscode.postMessage({ command: "stopMonitor" });
-      ctx.monitorActive = false;
+      ctx.monitor.active = false;
       ctx.btnMonitor.classList.remove("active");
     }
     ctx.btnMonitor.classList.add("hidden");
@@ -250,8 +242,8 @@ export function setUpReplayPlayback(ctx: ViewerContext): void {
   // A recording opens replay; opening any other tree closes it. Self-wired
   // so the module's message handler never needs to know replay exists.
   function handleHostMessage(event: MessageEvent): void {
-    const msg = event.data;
-    if (msg.command === "loadReplay") enterReplay(msg as LoadReplayMessage);
+    const msg = event.data as HostToWebviewMessage;
+    if (msg.command === "loadReplay") enterReplay(msg);
     else if (msg.command === "updateTree" && replay.mode) exitReplay();
   }
 

@@ -56,7 +56,7 @@ export async function exportTreeToPdf(ctx: ViewerContext): Promise<void> {
     ctx.vscode.postMessage({ command: "exportPdfError", message: "PDF libraries not loaded" });
     return;
   }
-  if (ctx.layoutNodes.length === 0) {
+  if (ctx.scene.layoutNodes.length === 0) {
     return;
   }
 

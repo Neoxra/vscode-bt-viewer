@@ -20,7 +20,7 @@ import { showNodeDetail } from "./sidePanels";
 export function render(ctx: ViewerContext): void {
   if (!ctx.treeData || !ctx.treeData.trees || ctx.treeData.trees.length === 0) return;
 
-  const treeId = ctx.selectedTreeId || ctx.treeData.mainTreeId;
+  const treeId = ctx.view.selectedTreeId || ctx.treeData.mainTreeId;
   const mainTreeRaw = ctx.treeData.trees.find(t => t.id === treeId) || ctx.treeData.trees[0];
   if (!mainTreeRaw || !mainTreeRaw.root) return;
 
@@ -46,41 +46,41 @@ export function render(ctx: ViewerContext): void {
 
   // Layout
   layoutTree(ctx, mainTree.root);
-  ctx.layoutNodes = [];
-  ctx.layoutEdges = [];
-  ctx.parentMap.clear();
-  flattenTree(ctx, mainTree.root, ctx.layoutNodes, ctx.layoutEdges, null);
+  ctx.scene.layoutNodes = [];
+  ctx.scene.layoutEdges = [];
+  ctx.scene.parentMap.clear();
+  flattenTree(ctx, mainTree.root, ctx.scene.layoutNodes, ctx.scene.layoutEdges, null);
 
   // Build lookup
-  ctx.nodeById.clear();
-  for (const node of ctx.layoutNodes) {
-    ctx.nodeById.set(node.id, node);
+  ctx.scene.nodeById.clear();
+  for (const node of ctx.scene.layoutNodes) {
+    ctx.scene.nodeById.set(node.id, node);
   }
 
   // Clear
   ctx.edgeGroup.innerHTML = "";
   ctx.nodeGroup.innerHTML = "";
-  ctx.nodeElements.clear();
-  ctx.edgeElements = [];
+  ctx.scene.nodeElements.clear();
+  ctx.scene.edgeElements = [];
 
   // Render edges
-  for (const edge of ctx.layoutEdges) {
-    const source = ctx.nodeById.get(edge.sourceId);
-    const target = ctx.nodeById.get(edge.targetId);
+  for (const edge of ctx.scene.layoutEdges) {
+    const source = ctx.scene.nodeById.get(edge.sourceId);
+    const target = ctx.scene.nodeById.get(edge.targetId);
     if (!source || !target) continue;
 
     const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
     path.setAttribute("class", "bt-edge");
     path.setAttribute("d", edgePath(source, target, edge.vertical));
     ctx.edgeGroup.appendChild(path);
-    ctx.edgeElements.push({ path, sourceId: edge.sourceId, targetId: edge.targetId, vertical: edge.vertical });
+    ctx.scene.edgeElements.push({ path, sourceId: edge.sourceId, targetId: edge.targetId, vertical: edge.vertical });
   }
 
   // Render nodes
-  for (const node of ctx.layoutNodes) {
+  for (const node of ctx.scene.layoutNodes) {
     const g = createNodeElement(ctx, node);
     ctx.nodeGroup.appendChild(g);
-    ctx.nodeElements.set(node.id, g);
+    ctx.scene.nodeElements.set(node.id, g);
   }
 
   // Add legend
@@ -176,12 +176,12 @@ function createNodeElement(ctx: ViewerContext, node: BTNode): SVGGElement {
       const refName = (node.ports.find(p => p.name === "ID") || {}).value || node.name;
       return !!refName && ctx.treeData!.trees.some(t => t.id === refName);
     })();
-  const isSubtreeExpanded = isExpandableSubtree && ctx.expandedSubtrees.has(node.id);
+  const isSubtreeExpanded = isExpandableSubtree && ctx.view.expandedSubtrees.has(node.id);
 
   // Collapse/expand chevron button. SubTree nodes get a chevron whenever
   // their reference resolves; regular nodes get one when they have children.
   if ((node.children && node.children.length > 0) || isExpandableSubtree) {
-    const isCollapsed = ctx.collapsedNodes.has(node.id);
+    const isCollapsed = ctx.view.collapsedNodes.has(node.id);
     // Open == chevron points down (children visible). For SubTrees, "open"
     // means we've inlined the referenced tree.
     const isOpen = isExpandableSubtree ? isSubtreeExpanded : !isCollapsed;
@@ -213,20 +213,20 @@ function createNodeElement(ctx: ViewerContext, node: BTNode): SVGGElement {
       const oldX = node._x;
       const oldY = node._y;
       if (isExpandableSubtree) {
-        if (ctx.expandedSubtrees.has(node.id)) ctx.expandedSubtrees.delete(node.id);
-        else ctx.expandedSubtrees.add(node.id);
+        if (ctx.view.expandedSubtrees.has(node.id)) ctx.view.expandedSubtrees.delete(node.id);
+        else ctx.view.expandedSubtrees.add(node.id);
       } else {
-        if (ctx.collapsedNodes.has(node.id)) ctx.collapsedNodes.delete(node.id);
-        else ctx.collapsedNodes.add(node.id);
+        if (ctx.view.collapsedNodes.has(node.id)) ctx.view.collapsedNodes.delete(node.id);
+        else ctx.view.collapsedNodes.add(node.id);
       }
-      const savedZoom = ctx.zoom;
+      const savedZoom = ctx.camera.zoom;
       render(ctx);
-      const updatedNode = ctx.nodeById.get(node.id);
+      const updatedNode = ctx.scene.nodeById.get(node.id);
       if (updatedNode) {
-        ctx.panX -= (updatedNode._x - oldX) * savedZoom;
-        ctx.panY -= (updatedNode._y - oldY) * savedZoom;
+        ctx.camera.panX -= (updatedNode._x - oldX) * savedZoom;
+        ctx.camera.panY -= (updatedNode._y - oldY) * savedZoom;
       }
-      ctx.zoom = savedZoom;
+      ctx.camera.zoom = savedZoom;
       updateTransform(ctx);
     }
     chevronHit.addEventListener("click", toggleCollapse);

@@ -3,6 +3,7 @@
  * palette (with per-type descriptions), and the per-node detail panel.
  */
 
+import { NodeCategory } from "../../shared/protocol";
 import { MODIFIER_CLICK_LABEL } from "./constants";
 import { BTNode, ViewerContext } from "./context";
 import { escHtml, fitToView, hideTooltip } from "./interaction";
@@ -74,7 +75,7 @@ export function showBlackboard(ctx: ViewerContext): void {
   ctx.sidePanelTitle.textContent = `Blackboard (${sorted.length} vars)`;
   ctx.sidePanelContent.innerHTML = html;
   ctx.sidePanel.classList.remove("hidden");
-  ctx.activeSidePanel = "blackboard";
+  ctx.view.activeSidePanel = "blackboard";
   ctx.btnBlackboard.classList.add("active");
   ctx.btnPalette.classList.remove("active");
   hideGotoButton(ctx);
@@ -101,7 +102,7 @@ export function showPalette(ctx: ViewerContext): void {
   }
 
   let html = "";
-  const categoryOrder = ["control", "decorator", "action", "condition", "subtree", "script"];
+  const categoryOrder: NodeCategory[] = ["control", "decorator", "action", "condition", "subtree", "script"];
 
   for (const cat of categoryOrder) {
     const catModels = byCategory[cat] || [];
@@ -153,7 +154,7 @@ export function showPalette(ctx: ViewerContext): void {
   ctx.sidePanelTitle.textContent = "Node Palette";
   ctx.sidePanelContent.innerHTML = html;
   ctx.sidePanel.classList.remove("hidden");
-  ctx.activeSidePanel = "palette";
+  ctx.view.activeSidePanel = "palette";
   ctx.btnPalette.classList.add("active");
   ctx.btnBlackboard.classList.remove("active");
   hideGotoButton(ctx);
@@ -190,7 +191,7 @@ function walkForPalette(node: BTNode | null, types: Map<string, { category: stri
 
 export function closeSidePanel(ctx: ViewerContext): void {
   ctx.sidePanel.classList.add("hidden");
-  ctx.activeSidePanel = null;
+  ctx.view.activeSidePanel = null;
   ctx.btnBlackboard.classList.remove("active");
   ctx.btnPalette.classList.remove("active");
   if (ctx.sidePanelGoto) ctx.sidePanelGoto.classList.add("hidden");
@@ -203,12 +204,12 @@ function hideGotoButton(ctx: ViewerContext): void {
 /** Wire the Blackboard/Palette toggle buttons and the panel close button. */
 export function initSidePanels(ctx: ViewerContext): void {
   ctx.btnBlackboard.addEventListener("click", () => {
-    if (ctx.activeSidePanel === "blackboard") { closeSidePanel(ctx); return; }
+    if (ctx.view.activeSidePanel === "blackboard") { closeSidePanel(ctx); return; }
     showBlackboard(ctx);
   });
 
   ctx.btnPalette.addEventListener("click", () => {
-    if (ctx.activeSidePanel === "palette") { closeSidePanel(ctx); return; }
+    if (ctx.view.activeSidePanel === "palette") { closeSidePanel(ctx); return; }
     showPalette(ctx);
   });
 
@@ -300,7 +301,7 @@ export function showNodeDetail(ctx: ViewerContext, node: BTNode): void {
   ctx.sidePanelTitle.textContent = "Node Info";
   ctx.sidePanelContent.innerHTML = html;
   ctx.sidePanel.classList.remove("hidden");
-  ctx.activeSidePanel = "detail";
+  ctx.view.activeSidePanel = "detail";
   ctx.btnBlackboard.classList.remove("active");
   ctx.btnPalette.classList.remove("active");
 
@@ -308,7 +309,7 @@ export function showNodeDetail(ctx: ViewerContext, node: BTNode): void {
   ctx.sidePanelContent.querySelectorAll("[data-child-id]").forEach(el => {
     el.addEventListener("click", () => {
       const childId = el.getAttribute("data-child-id");
-      const childNode = childId ? ctx.nodeById.get(childId) : undefined;
+      const childNode = childId ? ctx.scene.nodeById.get(childId) : undefined;
       if (childNode) showNodeDetail(ctx, childNode);
     });
   });
@@ -317,11 +318,12 @@ export function showNodeDetail(ctx: ViewerContext, node: BTNode): void {
   // Only visible when the parser resolved a source line for this node.
   if (ctx.sidePanelGoto) {
     if (node.xmlLine) {
-      ctx.sidePanelGoto.title = `Go to source line ${node.xmlLine} (or ${MODIFIER_CLICK_LABEL} the node)`;
+      const line = node.xmlLine;
+      ctx.sidePanelGoto.title = `Go to source line ${line} (or ${MODIFIER_CLICK_LABEL} the node)`;
       ctx.sidePanelGoto.onclick = () => {
         ctx.vscode.postMessage({
           command: "goToLine",
-          line: node.xmlLine,
+          line,
           file: node._sourceFile,
         });
       };
@@ -339,8 +341,8 @@ export function showNodeDetail(ctx: ViewerContext, node: BTNode): void {
       const treeId = viewBtn.getAttribute("data-tree-id");
       if (treeId && ctx.treeSelector) {
         ctx.treeSelector.value = treeId;
-        ctx.selectedTreeId = treeId;
-        ctx.collapsedNodes.clear();
+        ctx.view.selectedTreeId = treeId;
+        ctx.view.collapsedNodes.clear();
         render(ctx);
         setTimeout(() => fitToView(ctx), 50);
         closeSidePanel(ctx);
