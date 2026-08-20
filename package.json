@@ -113,12 +113,18 @@
     "compile": "npm run copy-webview-vendor && npm run compile:extension && npm run compile:webview",
     "typecheck": "tsc --noEmit && tsc -p webview",
     "watch": "npm run compile -- --watch",
-    "package": "npm run compile && vsce package --no-dependencies"
+    "package": "npm run compile && vsce package --no-dependencies",
+    "compile:test": "esbuild test/host.test.ts --bundle --external:vscode --format=cjs --platform=node --outdir=out-test",
+    "test:host": "npm run compile && npm run compile:test && vscode-test"
   },
   "devDependencies": {
+    "@types/mocha": "^10.0.10",
     "@types/node": "^20.11.0",
     "@types/vscode": "^1.85.0",
+    "@vscode/test-cli": "^0.0.15",
+    "@vscode/test-electron": "^3.1.0",
     "esbuild": "^0.27.4",
+    "mocha": "^11.8.0",
     "typescript": "^5.3.0"
   },
   "dependencies": {

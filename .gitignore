@@ -4,3 +4,6 @@ out/
 dist/
 webview/main.js
 webview/main.js.map
+out-test/
+.vscode-test/
+test/fixtures/*.btlog
