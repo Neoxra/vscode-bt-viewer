@@ -1,4 +1,6 @@
 node_modules/
 out/
 *.vsix
-dist/*.js.map
+dist/
+webview/main.js
+webview/main.js.map

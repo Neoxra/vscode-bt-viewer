@@ -108,7 +108,10 @@
   },
   "scripts": {
     "copy-webview-vendor": "node -e \"const fs=require('fs'),path=require('path');const dest=path.join('webview','vendor');fs.mkdirSync(dest,{recursive:true});fs.copyFileSync(require.resolve('jspdf/dist/jspdf.umd.min.js'),path.join(dest,'jspdf.umd.min.js'));fs.copyFileSync(require.resolve('svg2pdf.js/dist/svg2pdf.umd.min.js'),path.join(dest,'svg2pdf.umd.min.js'));\"",
-    "compile": "npm run copy-webview-vendor && esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --external:zeromq --format=cjs --platform=node --sourcemap",
+    "compile:extension": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --external:zeromq --format=cjs --platform=node --sourcemap",
+    "compile:webview": "esbuild webview/src/main.ts --bundle --outfile=webview/main.js --format=iife",
+    "compile": "npm run copy-webview-vendor && npm run compile:extension && npm run compile:webview",
+    "typecheck": "tsc --noEmit && tsc -p webview",
     "watch": "npm run compile -- --watch",
     "package": "npm run compile && vsce package --no-dependencies"
   },
