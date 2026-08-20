@@ -1971,7 +1971,7 @@
       const el = nodeElements.get(node.id);
       if (!el) continue;
 
-      el.classList.remove("status-idle", "status-running", "status-success", "status-failure", "subtree-active");
+      el.classList.remove("status-idle", "status-running", "status-success", "status-failure", "status-skipped", "subtree-active");
 
       if (node.uid !== undefined) {
         const status = statuses[String(node.uid)];
@@ -2118,7 +2118,7 @@
     for (const node of layoutNodes) {
       const el = nodeElements.get(node.id);
       if (!el) continue;
-      el.classList.remove("status-idle", "status-running", "status-success", "status-failure", "subtree-active");
+      el.classList.remove("status-idle", "status-running", "status-success", "status-failure", "status-skipped", "subtree-active");
     }
     drawMinimap();
   }
