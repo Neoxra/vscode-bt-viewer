@@ -70,6 +70,16 @@ export interface EdgeElement extends LayoutEdge {
   path: SVGPathElement;
 }
 
+/** Bounding box of every laid-out node, in tree coordinates. */
+export interface TreeBounds {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+  w: number;
+  h: number;
+}
+
 export type LayoutMode = "auto" | "horizontal" | "waterfall";
 export type SidePanelKind = "blackboard" | "palette" | "detail" | "subtreeView" | null;
 
@@ -81,6 +91,9 @@ export interface CameraState {
   isPanning: boolean;
   panStartX: number;
   panStartY: number;
+  // Pending animation-frame handle: pan/wheel mutate the camera per event but
+  // write the DOM at most once per frame.
+  frameRequest: number | null;
 }
 
 /** An in-progress node drag (null node = not dragging). */
@@ -88,6 +101,12 @@ export interface DragState {
   node: BTNode | null;
   offsetX: number;
   offsetY: number;
+  // Fixed for the duration of one drag: the dragged subtree's node ids and
+  // the edges touching them, so per-frame DOM updates skip the rest of the
+  // scene. Rebuilt by startNodeDrag, cleared by endNodeDrag.
+  nodeIds: Set<string>;
+  edges: EdgeElement[];
+  frameRequest: number | null;
 }
 
 /** What the user chose to look at: collapse/expand, layout, search, panels. */
@@ -107,6 +126,9 @@ export interface ViewState {
 
 /** The rendered scene: layout output and its DOM lookups, rebuilt by render(). */
 export interface SceneState {
+  // Cached bounding box of layoutNodes; null = recompute on next read.
+  // Invalidated by render() and by anything that moves node coordinates.
+  treeBounds: TreeBounds | null;
   layoutNodes: BTNode[];
   layoutEdges: LayoutEdge[];
   nodeElements: Map<string, SVGGElement>;
@@ -135,6 +157,9 @@ export interface ViewerContext {
   readonly view: ViewState;
   readonly scene: SceneState;
   readonly monitor: MonitorState;
+  // Minimap redraws are capped to one per interval; the trailing timer
+  // guarantees the final state is always drawn.
+  readonly minimapThrottle: { lastDraw: number; timer: ReturnType<typeof setTimeout> | null };
 
   // DOM refs
   readonly svg: SVGSVGElement;
@@ -222,12 +247,16 @@ export function createViewerContext(colors: ThemeColors): ViewerContext {
       isPanning: false,
       panStartX: 0,
       panStartY: 0,
+      frameRequest: null,
     },
 
     drag: {
       node: null,
       offsetX: 0,
       offsetY: 0,
+      nodeIds: new Set(),
+      edges: [],
+      frameRequest: null,
     },
 
     view: {
@@ -242,6 +271,7 @@ export function createViewerContext(colors: ThemeColors): ViewerContext {
     },
 
     scene: {
+      treeBounds: null,
       layoutNodes: [],
       layoutEdges: [],
       nodeElements: new Map(),
@@ -256,6 +286,8 @@ export function createViewerContext(colors: ThemeColors): ViewerContext {
       lastNodeStatuses: {},
       idleFadeTimer: null,
     },
+
+    minimapThrottle: { lastDraw: 0, timer: null },
 
     svg: byId<HTMLElement>("tree-svg") as unknown as SVGSVGElement,
     treeGroup,

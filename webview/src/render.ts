@@ -46,6 +46,7 @@ export function render(ctx: ViewerContext): void {
 
   // Layout
   layoutTree(ctx, mainTree.root);
+  ctx.scene.treeBounds = null;
   ctx.scene.layoutNodes = [];
   ctx.scene.layoutEdges = [];
   ctx.scene.parentMap.clear();

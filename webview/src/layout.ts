@@ -13,7 +13,7 @@ import {
   SIBLING_GAP,
 } from "./constants";
 import { StatusMap } from "../../shared/protocol";
-import { BTNode, LayoutEdge, Tree, ViewerContext } from "./context";
+import { BTNode, LayoutEdge, Tree, TreeBounds, ViewerContext } from "./context";
 
 export const LINE_H = 13; // Height per line of text
 const MAX_CHARS_PER_LINE = 22; // Wrap threshold
@@ -378,16 +378,8 @@ export function expandAllSubtrees(ctx: ViewerContext, tree: Tree): void {
   }
 }
 
-export interface TreeBounds {
-  minX: number;
-  minY: number;
-  maxX: number;
-  maxY: number;
-  w: number;
-  h: number;
-}
-
 export function getTreeBounds(ctx: ViewerContext): TreeBounds {
+  if (ctx.scene.treeBounds) return ctx.scene.treeBounds;
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   for (const node of ctx.scene.layoutNodes) {
     minX = Math.min(minX, node._x);
@@ -395,5 +387,6 @@ export function getTreeBounds(ctx: ViewerContext): TreeBounds {
     maxX = Math.max(maxX, node._x + node._w);
     maxY = Math.max(maxY, node._y + node._h);
   }
-  return { minX, minY, maxX, maxY, w: maxX - minX, h: maxY - minY };
+  ctx.scene.treeBounds = { minX, minY, maxX, maxY, w: maxX - minX, h: maxY - minY };
+  return ctx.scene.treeBounds;
 }

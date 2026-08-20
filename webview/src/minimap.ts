@@ -8,7 +8,27 @@ import { ViewerContext } from "./context";
 import { getTreeBounds } from "./layout";
 import { updateTransform } from "./interaction";
 
+// Minimum interval between minimap redraws. The overview does not need frame
+// rate; capping it keeps pan/zoom/drag on huge trees from paying an O(nodes)
+// canvas repaint per frame. A trailing timer always draws the settled state.
+const REDRAW_INTERVAL_MS = 100;
+
 export function drawMinimap(ctx: ViewerContext): void {
+  const throttle = ctx.minimapThrottle;
+  const elapsed = performance.now() - throttle.lastDraw;
+  if (elapsed >= REDRAW_INTERVAL_MS) {
+    throttle.lastDraw = performance.now();
+    drawMinimapNow(ctx);
+  } else if (!throttle.timer) {
+    throttle.timer = setTimeout(() => {
+      throttle.timer = null;
+      throttle.lastDraw = performance.now();
+      drawMinimapNow(ctx);
+    }, REDRAW_INTERVAL_MS - elapsed);
+  }
+}
+
+function drawMinimapNow(ctx: ViewerContext): void {
   const { minimap, minimapCtx } = ctx;
   if (!minimapCtx || !minimap || ctx.scene.layoutNodes.length === 0) {
     if (minimap) minimap.style.display = "none";
@@ -65,14 +85,16 @@ export function drawMinimap(ctx: ViewerContext): void {
     const nw = Math.max(node._w * scale, 2);
     const nh = Math.max(node._h * scale, 1.5);
 
-    // Highlight running nodes using the same palette as the SVG view.
-    const el = ctx.scene.nodeElements.get(node.id);
+    // Highlight running nodes using the same palette as the SVG view. Read
+    // the status overlay state directly; per-node DOM classList reads are
+    // what made this loop dominate pan/zoom on large trees.
     const status = ctx.colors.status || {};
-    if (el && el.classList.contains("status-running")) {
+    const nodeStatus = node.uid !== undefined ? ctx.monitor.lastNodeStatuses[String(node.uid)] : undefined;
+    if (nodeStatus === "RUNNING") {
       c2d.fillStyle = status.running || color.fill;
-    } else if (el && el.classList.contains("status-success")) {
+    } else if (nodeStatus === "SUCCESS") {
       c2d.fillStyle = status.success || color.fill;
-    } else if (el && el.classList.contains("status-failure")) {
+    } else if (nodeStatus === "FAILURE") {
       c2d.fillStyle = status.failure || color.fill;
     } else {
       c2d.fillStyle = color.fill;

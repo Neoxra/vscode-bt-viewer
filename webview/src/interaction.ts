@@ -6,7 +6,7 @@
 
 import { SIBLING_GAP } from "./constants";
 import { BTNode, ViewerContext } from "./context";
-import { updateAllEdges } from "./layout";
+import { edgePath, getTreeBounds, updateAllEdges } from "./layout";
 import { drawMinimap } from "./minimap";
 
 // ------ NODE DRAGGING ------
@@ -18,8 +18,38 @@ export function startNodeDrag(ctx: ViewerContext, e: MouseEvent, node: BTNode): 
   ctx.drag.offsetY = svgPoint.y - node._y;
   hideTooltip(ctx);
 
+  // Everything the per-frame drag update must touch: the dragged subtree's
+  // nodes (matching what moveSubtreeBy moves) and every edge with an endpoint
+  // in it. Fixed for the drag's duration, so the frame update skips the rest
+  // of the scene.
+  ctx.drag.nodeIds = new Set();
+  const collect = (n: BTNode): void => {
+    ctx.drag.nodeIds.add(n.id);
+    if (!ctx.view.collapsedNodes.has(n.id) && n.children) {
+      for (const child of n.children) collect(child);
+    }
+  };
+  collect(node);
+  ctx.drag.edges = ctx.scene.edgeElements.filter(
+    edge => ctx.drag.nodeIds.has(edge.sourceId) || ctx.drag.nodeIds.has(edge.targetId));
+
   const el = ctx.scene.nodeElements.get(node.id);
   if (el) el.classList.add("dragging");
+}
+
+/** Sync the dragged subtree's DOM (nodes + touching edges) to current data. */
+function updateDraggedSubtree(ctx: ViewerContext): void {
+  for (const id of ctx.drag.nodeIds) {
+    const node = ctx.scene.nodeById.get(id);
+    const el = ctx.scene.nodeElements.get(id);
+    if (node && el) el.setAttribute("transform", `translate(${node._x}, ${node._y})`);
+  }
+  for (const edge of ctx.drag.edges) {
+    const source = ctx.scene.nodeById.get(edge.sourceId);
+    const target = ctx.scene.nodeById.get(edge.targetId);
+    if (source && target) edge.path.setAttribute("d", edgePath(source, target, edge.vertical));
+  }
+  drawMinimap(ctx);
 }
 
 function handleNodeDrag(ctx: ViewerContext, e: MouseEvent): void {
@@ -31,10 +61,15 @@ function handleNodeDrag(ctx: ViewerContext, e: MouseEvent): void {
   const dx = newX - ctx.drag.node._x;
   const dy = newY - ctx.drag.node._y;
 
-  // Just move the subtree, no collision during drag
+  // Just move the subtree, no collision during drag. Data moves per event;
+  // the DOM syncs at most once per animation frame.
   moveSubtreeBy(ctx, ctx.drag.node, dx, dy);
-  updateAllNodePositions(ctx);
-  updateAllEdges(ctx);
+  if (ctx.drag.frameRequest === null) {
+    ctx.drag.frameRequest = requestAnimationFrame(() => {
+      ctx.drag.frameRequest = null;
+      if (ctx.drag.node) updateDraggedSubtree(ctx);
+    });
+  }
 }
 
 function endNodeDrag(ctx: ViewerContext): void {
@@ -42,7 +77,16 @@ function endNodeDrag(ctx: ViewerContext): void {
     const el = ctx.scene.nodeElements.get(ctx.drag.node.id);
     if (el) el.classList.remove("dragging");
 
+    // Flush any pending frame so the DOM matches the data before settling.
+    if (ctx.drag.frameRequest !== null) {
+      cancelAnimationFrame(ctx.drag.frameRequest);
+      ctx.drag.frameRequest = null;
+    }
+    updateDraggedSubtree(ctx);
+
     ctx.drag.node = null;
+    ctx.drag.nodeIds = new Set();
+    ctx.drag.edges = [];
     // On release: resolve all overlaps with animated settle
     animateSettle(ctx);
   }
@@ -50,6 +94,7 @@ function endNodeDrag(ctx: ViewerContext): void {
 
 /** Move a node and all its (non-collapsed) descendants by dx, dy. */
 function moveSubtreeBy(ctx: ViewerContext, node: BTNode, dx: number, dy: number): void {
+  ctx.scene.treeBounds = null;
   node._x += dx;
   node._y += dy;
   const isCollapsed = ctx.view.collapsedNodes.has(node.id);
@@ -143,6 +188,7 @@ function animateSettle(ctx: ViewerContext): void {
       node._x = s.x + (e.x - s.x) * ease;
       node._y = s.y + (e.y - s.y) * ease;
     }
+    ctx.scene.treeBounds = null;
 
     updateAllNodePositions(ctx);
     updateAllEdges(ctx);
@@ -228,16 +274,11 @@ export function updateTransform(ctx: ViewerContext): void {
 export function fitToView(ctx: ViewerContext): void {
   if (ctx.scene.layoutNodes.length === 0) return;
 
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const node of ctx.scene.layoutNodes) {
-    minX = Math.min(minX, node._x);
-    minY = Math.min(minY, node._y);
-    maxX = Math.max(maxX, node._x + node._w);
-    maxY = Math.max(maxY, node._y + node._h);
-  }
-
-  const treeW = maxX - minX || 1;
-  const treeH = maxY - minY || 1;
+  const bounds = getTreeBounds(ctx);
+  const minX = bounds.minX;
+  const minY = bounds.minY;
+  const treeW = bounds.w || 1;
+  const treeH = bounds.h || 1;
   const containerRect = ctx.container.getBoundingClientRect();
 
   if (containerRect.width < 10 || containerRect.height < 10) {
@@ -257,6 +298,15 @@ export function fitToView(ctx: ViewerContext): void {
   ctx.camera.panY = padY - minY * ctx.camera.zoom;
 
   updateTransform(ctx);
+}
+
+/** Apply the camera on the next animation frame (coalesces pan/wheel bursts). */
+function scheduleCameraUpdate(ctx: ViewerContext): void {
+  if (ctx.camera.frameRequest !== null) return;
+  ctx.camera.frameRequest = requestAnimationFrame(() => {
+    ctx.camera.frameRequest = null;
+    updateTransform(ctx);
+  });
 }
 
 /** Wire background pan, node-drag routing, wheel zoom, and tooltip tracking. */
@@ -279,7 +329,7 @@ export function initPanZoom(ctx: ViewerContext): void {
     if (ctx.camera.isPanning) {
       ctx.camera.panX = e.clientX - ctx.camera.panStartX;
       ctx.camera.panY = e.clientY - ctx.camera.panStartY;
-      updateTransform(ctx);
+      scheduleCameraUpdate(ctx);
     }
     // Update tooltip position
     if (!ctx.tooltip.classList.contains("hidden")) {
@@ -309,6 +359,6 @@ export function initPanZoom(ctx: ViewerContext): void {
     ctx.camera.panX = mouseX - (mouseX - ctx.camera.panX) * (ctx.camera.zoom / prevZoom);
     ctx.camera.panY = mouseY - (mouseY - ctx.camera.panY) * (ctx.camera.zoom / prevZoom);
 
-    updateTransform(ctx);
+    scheduleCameraUpdate(ctx);
   }, { passive: false });
 }
